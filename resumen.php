@@ -143,6 +143,7 @@ function desarrollo_xml_resumen($empresa, $resumen, $comprobantes){
                 <cac:TaxSubtotal>
                     <cbc:TaxAmount currencyID="PEN">'.$total_igv.'</cbc:TaxAmount>
                     <cac:TaxCategory>
+                        <cbc:Percent>18.00</cbc:Percent>
                         <cac:TaxScheme>
                             <cbc:ID>1000</cbc:ID>
                             <cbc:Name>IGV</cbc:Name>

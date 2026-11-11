@@ -16,6 +16,7 @@
                             "const d=new Date(Date.now()-5*3600*1000),iso=d.toISOString();",
                             "pm.collectionVariables.set('fecha',iso.slice(0,10));",
                             "pm.collectionVariables.set('fecha_compacta',iso.slice(0,10).replace(/-/g,''));",
+                            "pm.collectionVariables.set('correlativo',String(Math.floor(Date.now()/1000)%100000));",
                             "pm.collectionVariables.set('numero',String(Math.floor(Date.now()/1000)%100000000).padStart(8,'0'));"
                         ]
                     }
@@ -61,6 +62,7 @@
                             "const d=new Date(Date.now()-5*3600*1000),iso=d.toISOString();",
                             "pm.collectionVariables.set('fecha',iso.slice(0,10));",
                             "pm.collectionVariables.set('fecha_compacta',iso.slice(0,10).replace(/-/g,''));",
+                            "pm.collectionVariables.set('correlativo',String(Math.floor(Date.now()/1000)%100000));",
                             "pm.collectionVariables.set('numero',String(Math.floor(Date.now()/1000)%100000000).padStart(8,'0'));"
                         ]
                     }
@@ -106,6 +108,7 @@
                             "const d=new Date(Date.now()-5*3600*1000),iso=d.toISOString();",
                             "pm.collectionVariables.set('fecha',iso.slice(0,10));",
                             "pm.collectionVariables.set('fecha_compacta',iso.slice(0,10).replace(/-/g,''));",
+                            "pm.collectionVariables.set('correlativo',String(Math.floor(Date.now()/1000)%100000));",
                             "pm.collectionVariables.set('numero',String(Math.floor(Date.now()/1000)%100000000).padStart(8,'0'));"
                         ]
                     }
@@ -151,6 +154,7 @@
                             "const d=new Date(Date.now()-5*3600*1000),iso=d.toISOString();",
                             "pm.collectionVariables.set('fecha',iso.slice(0,10));",
                             "pm.collectionVariables.set('fecha_compacta',iso.slice(0,10).replace(/-/g,''));",
+                            "pm.collectionVariables.set('correlativo',String(Math.floor(Date.now()/1000)%100000));",
                             "pm.collectionVariables.set('numero',String(Math.floor(Date.now()/1000)%100000000).padStart(8,'0'));"
                         ]
                     }
@@ -196,6 +200,7 @@
                             "const d=new Date(Date.now()-5*3600*1000),iso=d.toISOString();",
                             "pm.collectionVariables.set('fecha',iso.slice(0,10));",
                             "pm.collectionVariables.set('fecha_compacta',iso.slice(0,10).replace(/-/g,''));",
+                            "pm.collectionVariables.set('correlativo',String(Math.floor(Date.now()/1000)%100000));",
                             "pm.collectionVariables.set('numero',String(Math.floor(Date.now()/1000)%100000000).padStart(8,'0'));"
                         ]
                     }
@@ -241,6 +246,7 @@
                             "const d=new Date(Date.now()-5*3600*1000),iso=d.toISOString();",
                             "pm.collectionVariables.set('fecha',iso.slice(0,10));",
                             "pm.collectionVariables.set('fecha_compacta',iso.slice(0,10).replace(/-/g,''));",
+                            "pm.collectionVariables.set('correlativo',String(Math.floor(Date.now()/1000)%100000));",
                             "pm.collectionVariables.set('numero',String(Math.floor(Date.now()/1000)%100000000).padStart(8,'0'));"
                         ]
                     }
@@ -286,6 +292,7 @@
                             "const d=new Date(Date.now()-5*3600*1000),iso=d.toISOString();",
                             "pm.collectionVariables.set('fecha',iso.slice(0,10));",
                             "pm.collectionVariables.set('fecha_compacta',iso.slice(0,10).replace(/-/g,''));",
+                            "pm.collectionVariables.set('correlativo',String(Math.floor(Date.now()/1000)%100000));",
                             "pm.collectionVariables.set('numero',String(Math.floor(Date.now()/1000)%100000000).padStart(8,'0'));"
                         ]
                     }
@@ -301,7 +308,7 @@
                 ],
                 "body": {
                     "mode": "raw",
-                    "raw": "{\n    \"empresa\": {\n        \"ruc\": \"{{ruc}}\",\n        \"razon_social\": \"MI EMPRESA S.A.C.\",\n        \"modo\": 0,\n        \"usu_secundario_user\": \"{{usuario_sol}}\",\n        \"usu_secundario_password\": \"{{clave_sol}}\"\n    },\n    \"anulacion\": {\n        \"correlativo_diario\": \"1\",\n        \"fecha_comprobante\": \"{{fecha}}\",\n        \"tipo_documento_codigo\": \"03\",\n        \"serie\": \"B001\",\n        \"numero\": \"00000001\"\n    }\n}",
+                    "raw": "{\n    \"empresa\": {\n        \"ruc\": \"{{ruc}}\",\n        \"razon_social\": \"MI EMPRESA S.A.C.\",\n        \"modo\": 0,\n        \"usu_secundario_user\": \"{{usuario_sol}}\",\n        \"usu_secundario_password\": \"{{clave_sol}}\"\n    },\n    \"anulacion\": {\n        \"correlativo_diario\": \"{{correlativo}}\",\n        \"fecha_comprobante\": \"{{fecha}}\",\n        \"tipo_documento_codigo\": \"01\",\n        \"serie\": \"F001\",\n        \"numero\": \"{{numero_factura}}\"\n    }\n}",
                     "options": {
                         "raw": {
                             "language": "json"
@@ -317,7 +324,7 @@
                         "baja.php"
                     ]
                 },
-                "description": "Solo comprobantes con menos de 7 dias. Devuelve un ticket. ATENCION: baja.php tiene una URL de otro servidor escrita en el codigo."
+                "description": "Solo FACTURAS (01) con menos de 7 dias; las boletas se anulan por resumen diario (status 3). Pon en {{numero_factura}} el numero de una factura ya aceptada. Devuelve un ticket. El correlativo debe ser nuevo cada vez."
             }
         },
         {
@@ -331,6 +338,7 @@
                             "const d=new Date(Date.now()-5*3600*1000),iso=d.toISOString();",
                             "pm.collectionVariables.set('fecha',iso.slice(0,10));",
                             "pm.collectionVariables.set('fecha_compacta',iso.slice(0,10).replace(/-/g,''));",
+                            "pm.collectionVariables.set('correlativo',String(Math.floor(Date.now()/1000)%100000));",
                             "pm.collectionVariables.set('numero',String(Math.floor(Date.now()/1000)%100000000).padStart(8,'0'));"
                         ]
                     }
@@ -346,7 +354,7 @@
                 ],
                 "body": {
                     "mode": "raw",
-                    "raw": "{\n    \"empresa\": {\n        \"ruc\": \"{{ruc}}\",\n        \"razon_social\": \"MI EMPRESA S.A.C.\",\n        \"modo\": 0,\n        \"usu_secundario_user\": \"{{usuario_sol}}\",\n        \"usu_secundario_password\": \"{{clave_sol}}\"\n    },\n    \"resumen\": {\n        \"numero\": \"{{fecha_compacta}}\",\n        \"correlativo\": \"1\",\n        \"fecha_documentos\": \"{{fecha}}\",\n        \"fecha_resumen\": \"{{fecha}}\"\n    },\n    \"comprobantes\": [\n        {\n            \"tipo_documento\": \"03\",\n            \"serie\": \"B001\",\n            \"numero\": \"00000001\",\n            \"cliente_numero_documento\": \"12345678\",\n            \"cliente_tipo_documento\": \"1\",\n            \"total_a_pagar\": 118,\n            \"total_gravada\": 100,\n            \"total_igv\": 18,\n            \"total_exonerada\": \"\",\n            \"total_inafecta\": \"\",\n            \"total_gratuita\": \"\",\n            \"status\": \"1\"\n        }\n    ]\n}",
+                    "raw": "{\n    \"empresa\": {\n        \"ruc\": \"{{ruc}}\",\n        \"razon_social\": \"MI EMPRESA S.A.C.\",\n        \"modo\": 0,\n        \"usu_secundario_user\": \"{{usuario_sol}}\",\n        \"usu_secundario_password\": \"{{clave_sol}}\"\n    },\n    \"resumen\": {\n        \"numero\": \"{{fecha_compacta}}\",\n        \"correlativo\": \"{{correlativo}}\",\n        \"fecha_documentos\": \"{{fecha}}\",\n        \"fecha_resumen\": \"{{fecha}}\"\n    },\n    \"comprobantes\": [\n        {\n            \"tipo_documento\": \"03\",\n            \"serie\": \"B001\",\n            \"numero\": \"00000001\",\n            \"cliente_numero_documento\": \"12345678\",\n            \"cliente_tipo_documento\": \"1\",\n            \"total_a_pagar\": 118,\n            \"total_gravada\": 100,\n            \"total_igv\": 18,\n            \"total_exonerada\": \"\",\n            \"total_inafecta\": \"\",\n            \"total_gratuita\": \"\",\n            \"status\": \"1\"\n        }\n    ]\n}",
                     "options": {
                         "raw": {
                             "language": "json"
@@ -376,6 +384,7 @@
                             "const d=new Date(Date.now()-5*3600*1000),iso=d.toISOString();",
                             "pm.collectionVariables.set('fecha',iso.slice(0,10));",
                             "pm.collectionVariables.set('fecha_compacta',iso.slice(0,10).replace(/-/g,''));",
+                            "pm.collectionVariables.set('correlativo',String(Math.floor(Date.now()/1000)%100000));",
                             "pm.collectionVariables.set('numero',String(Math.floor(Date.now()/1000)%100000000).padStart(8,'0'));"
                         ]
                     }
@@ -391,7 +400,7 @@
                 ],
                 "body": {
                     "mode": "raw",
-                    "raw": "{\n    \"empresa\": {\n        \"ruc\": \"{{ruc}}\",\n        \"razon_social\": \"MI EMPRESA S.A.C.\",\n        \"modo\": 0,\n        \"usu_secundario_user\": \"{{usuario_sol}}\",\n        \"usu_secundario_password\": \"{{clave_sol}}\"\n    },\n    \"anulacion\": {\n        \"corelativo\": \"1\",\n        \"fecha_ticket\": \"{{fecha}}\",\n        \"ticket\": \"{{ticket}}\"\n    }\n}",
+                    "raw": "{\n    \"empresa\": {\n        \"ruc\": \"{{ruc}}\",\n        \"razon_social\": \"MI EMPRESA S.A.C.\",\n        \"modo\": 0,\n        \"usu_secundario_user\": \"{{usuario_sol}}\",\n        \"usu_secundario_password\": \"{{clave_sol}}\"\n    },\n    \"anulacion\": {\n        \"corelativo\": \"{{correlativo}}\",\n        \"fecha_ticket\": \"{{fecha}}\",\n        \"ticket\": \"{{ticket}}\"\n    }\n}",
                     "options": {
                         "raw": {
                             "language": "json"
@@ -421,6 +430,7 @@
                             "const d=new Date(Date.now()-5*3600*1000),iso=d.toISOString();",
                             "pm.collectionVariables.set('fecha',iso.slice(0,10));",
                             "pm.collectionVariables.set('fecha_compacta',iso.slice(0,10).replace(/-/g,''));",
+                            "pm.collectionVariables.set('correlativo',String(Math.floor(Date.now()/1000)%100000));",
                             "pm.collectionVariables.set('numero',String(Math.floor(Date.now()/1000)%100000000).padStart(8,'0'));"
                         ]
                     }
@@ -436,7 +446,7 @@
                 ],
                 "body": {
                     "mode": "raw",
-                    "raw": "{\n    \"empresa\": {\n        \"ruc\": \"{{ruc}}\",\n        \"razon_social\": \"MI EMPRESA S.A.C.\",\n        \"modo\": 0,\n        \"usu_secundario_produccion_user\": \"{{usuario_sol}}\",\n        \"usu_secundario_produccion_password\": \"{{clave_sol}}\"\n    },\n    \"reversion\": {\n        \"correlativo_diario\": \"1\",\n        \"fecha_resumen\": \"{{fecha}}\",\n        \"fecha_documentos\": \"{{fecha}}\"\n    },\n    \"documento_relacionados\": [\n        {\n            \"tipo_documento_codigo\": \"03\",\n            \"serie\": \"B001\",\n            \"numero\": \"00000001\",\n            \"descripcion\": \"ANULACION POR ERROR\"\n        }\n    ]\n}",
+                    "raw": "{\n    \"empresa\": {\n        \"ruc\": \"{{ruc}}\",\n        \"razon_social\": \"MI EMPRESA S.A.C.\",\n        \"modo\": 0,\n        \"usu_secundario_produccion_user\": \"{{usuario_sol}}\",\n        \"usu_secundario_produccion_password\": \"{{clave_sol}}\"\n    },\n    \"reversion\": {\n        \"correlativo_diario\": \"{{correlativo}}\",\n        \"fecha_resumen\": \"{{fecha}}\",\n        \"fecha_documentos\": \"{{fecha}}\"\n    },\n    \"documento_relacionados\": [\n        {\n            \"tipo_documento_codigo\": \"20\",\n            \"serie\": \"R001\",\n            \"numero\": \"{{numero_factura}}\",\n            \"descripcion\": \"ANULACION POR ERROR\"\n        }\n    ]\n}",
                     "options": {
                         "raw": {
                             "language": "json"
@@ -466,6 +476,7 @@
                             "const d=new Date(Date.now()-5*3600*1000),iso=d.toISOString();",
                             "pm.collectionVariables.set('fecha',iso.slice(0,10));",
                             "pm.collectionVariables.set('fecha_compacta',iso.slice(0,10).replace(/-/g,''));",
+                            "pm.collectionVariables.set('correlativo',String(Math.floor(Date.now()/1000)%100000));",
                             "pm.collectionVariables.set('numero',String(Math.floor(Date.now()/1000)%100000000).padStart(8,'0'));"
                         ]
                     }
@@ -529,6 +540,14 @@
         {
             "key": "ticket",
             "value": ""
+        },
+        {
+            "key": "numero_factura",
+            "value": "00000001"
+        },
+        {
+            "key": "correlativo",
+            "value": "1"
         },
         {
             "key": "numero",

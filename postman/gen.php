@@ -34,6 +34,7 @@ $pre = array(
   "const d=new Date(Date.now()-5*3600*1000),iso=d.toISOString();",
   "pm.collectionVariables.set('fecha',iso.slice(0,10));",
   "pm.collectionVariables.set('fecha_compacta',iso.slice(0,10).replace(/-/g,''));",
+  "pm.collectionVariables.set('correlativo',String(Math.floor(Date.now()/1000)%100000));",
   "pm.collectionVariables.set('numero',String(Math.floor(Date.now()/1000)%100000000).padStart(8,'0'));"
 );
 
@@ -76,20 +77,20 @@ $items[] = req("20 Comprobante de Retencion", "post_retencion.php", array(
   "documento_relacionados"=>array(array("relacionado_tipo_documento"=>"01","relacionado_serie"=>"F001","relacionado_numero"=>"00000001","relacionado_fecha_emision"=>"{{fecha}}","relacionado_monto_total"=>1180.00,"pago_numero"=>"1","pago_monto"=>1180.00,"pago_fecha"=>"{{fecha}}","retencion_monto"=>35.40,"retencion_fecha"=>"{{fecha}}","moneda"=>"1","moneda_tipo_cambio"=>1,"moneda_fecha_cambio"=>"{{fecha}}"))
   ), "Retencion 3% (codigo 01) o 6% (codigo 02).", $pre);
 
-$items[] = req("RA Comunicacion de Baja", "baja.php", array("empresa"=>$empBaja,"anulacion"=>array("correlativo_diario"=>"1","fecha_comprobante"=>"{{fecha}}","tipo_documento_codigo"=>"03","serie"=>"B001","numero"=>"00000001")),
-  "Solo comprobantes con menos de 7 dias. Devuelve un ticket. ATENCION: baja.php tiene una URL de otro servidor escrita en el codigo.", $pre);
+$items[] = req("RA Comunicacion de Baja", "baja.php", array("empresa"=>$empBaja,"anulacion"=>array("correlativo_diario"=>"{{correlativo}}","fecha_comprobante"=>"{{fecha}}","tipo_documento_codigo"=>"01","serie"=>"F001","numero"=>"{{numero_factura}}")),
+  "Solo FACTURAS (01) con menos de 7 dias; las boletas se anulan por resumen diario (status 3). Pon en {{numero_factura}} el numero de una factura ya aceptada. Devuelve un ticket. El correlativo debe ser nuevo cada vez.", $pre);
 
 $items[] = req("RC Resumen Diario de Boletas", "resumen.php", array("empresa"=>$empBaja,
-  "resumen"=>array("numero"=>"{{fecha_compacta}}","correlativo"=>"1","fecha_documentos"=>"{{fecha}}","fecha_resumen"=>"{{fecha}}"),
+  "resumen"=>array("numero"=>"{{fecha_compacta}}","correlativo"=>"{{correlativo}}","fecha_documentos"=>"{{fecha}}","fecha_resumen"=>"{{fecha}}"),
   "comprobantes"=>array(array("tipo_documento"=>"03","serie"=>"B001","numero"=>"00000001","cliente_numero_documento"=>"12345678","cliente_tipo_documento"=>"1","total_a_pagar"=>118.00,"total_gravada"=>100.00,"total_igv"=>18.00,"total_exonerada"=>"","total_inafecta"=>"","total_gratuita"=>"","status"=>"1"))),
   "status: 1 emitido, 2 anulado, 3 error.", $pre);
 
-$items[] = req("Consultar ticket (resumen o baja)", "resumen_ticket.php", array("empresa"=>$empBaja,"anulacion"=>array("corelativo"=>"1","fecha_ticket"=>"{{fecha}}","ticket"=>"{{ticket}}")),
+$items[] = req("Consultar ticket (resumen o baja)", "resumen_ticket.php", array("empresa"=>$empBaja,"anulacion"=>array("corelativo"=>"{{correlativo}}","fecha_ticket"=>"{{fecha}}","ticket"=>"{{ticket}}")),
   "Consulta el resultado del ticket devuelto por baja o resumen. Pon el ticket en la variable {{ticket}}.", $pre);
 
 $items[] = req("RR Reversion", "post_reversion.php", array("empresa"=>$empRev,
-  "reversion"=>array("correlativo_diario"=>"1","fecha_resumen"=>"{{fecha}}","fecha_documentos"=>"{{fecha}}"),
-  "documento_relacionados"=>array(array("tipo_documento_codigo"=>"03","serie"=>"B001","numero"=>"00000001","descripcion"=>"ANULACION POR ERROR"))), "Reversion.", $pre);
+  "reversion"=>array("correlativo_diario"=>"{{correlativo}}","fecha_resumen"=>"{{fecha}}","fecha_documentos"=>"{{fecha}}"),
+  "documento_relacionados"=>array(array("tipo_documento_codigo"=>"20","serie"=>"R001","numero"=>"{{numero_factura}}","descripcion"=>"ANULACION POR ERROR"))), "Reversion.", $pre);
 
 $items[] = req("09 Guia de Remision Remitente", "post_guia.php", array(
   "empresa"=>empresa(array("urbanizacion"=>"","modo"=>"0","gre_client_id"=>"{{gre_client_id}}","gre_client_secret"=>"{{gre_client_secret}}")),
@@ -110,6 +111,6 @@ $col = array("info"=>array("name"=>"API SUNAT - Referencia (beta)","schema"=>"ht
    array("key"=>"base_url","value"=>"http://localhost/API_SUNAT"),array("key"=>"ruc","value"=>"20000000001"),
    array("key"=>"usuario_sol","value"=>"MODDATOS"),array("key"=>"clave_sol","value"=>"moddatos"),
    array("key"=>"gre_client_id","value"=>""),array("key"=>"gre_client_secret","value"=>""),
-   array("key"=>"ticket","value"=>""),array("key"=>"numero","value"=>""),array("key"=>"fecha","value"=>""),array("key"=>"fecha_compacta","value"=>"")));
+   array("key"=>"ticket","value"=>""),array("key"=>"numero_factura","value"=>"00000001"),array("key"=>"correlativo","value"=>"1"),array("key"=>"numero","value"=>""),array("key"=>"fecha","value"=>""),array("key"=>"fecha_compacta","value"=>"")));
 file_put_contents(__DIR__."/API_SUNAT.postman_collection.json", json_encode($col, JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));
 echo "ok: ".count($items)." peticiones\n";
