@@ -1,0 +1,23 @@
+# Secretos y certificados
+.env
+*.pem
+*.pfx
+*.p12
+*.key
+greenter/config.php
+libraries/certificado_digital/
+
+# Datos generados (XML, CDR, PDF de comprobantes)
+files/facturacion_electronica/*
+!files/facturacion_electronica/**/dummy
+
+# Scripts de prueba/diagnostico (contienen credenciales)
+test_*.php
+check_cert.php
+testing.php
+ws_sunat/respuesta_oauth.txt
+
+# Entorno
+.vscode/
+.idea/
+*.log
