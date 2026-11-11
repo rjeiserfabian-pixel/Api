@@ -102,7 +102,7 @@ $items[] = req("09 Guia de Remision Remitente", "post_guia.php", array(
   "conductores"=>array(array("tipo_documento"=>"1","numero_documento"=>"12345678","nombres"=>"JUAN","apellidos"=>"PEREZ GARCIA","licencia"=>"Q12345678","principal"=>true)),
   "items"=>array(array("codigo_producto"=>"cc1","producto"=>"PRODUCTO DE EJEMPLO","codigo_sunat"=>"43211503","cantidad"=>1,"codigo_unidad"=>"NIU")),
   "documentos_relacionados"=>array(array("tipo_documento"=>"03","serie"=>"B001","numero"=>"00000005","ruc_emisor"=>"{{ruc}}")),
-  "evento"=>new stdClass), "Requiere credenciales GRE (client_id y client_secret) generadas en el portal de SUNAT.", $pre);
+  "evento"=>new stdClass), "Requiere credenciales GRE. OJO: SUNAT no tiene beta para guias. Con modo distinto de 1 solo se genera y firma (NO se envia); con modo 1 se emite de verdad.", $pre);
 
 $col = array("info"=>array("name"=>"API SUNAT - Referencia (beta)","schema"=>"https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
   "description"=>"Casos de referencia (modo beta, empresa.modo=0). Tras cada cambio de codigo, reenviar: si SUNAT sigue aceptandolos, no se rompio nada. Completar en Postman las variables usuario_sol, clave_sol, gre_client_id y gre_client_secret; no guardarlas en el repositorio."),

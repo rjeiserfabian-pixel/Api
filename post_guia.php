@@ -103,6 +103,22 @@ foreach (['xml', 'zip'] as $ext) {
 // =========================================================
 crear_xml($nombre_xml, $empresa, $remitente, $destinatario, $guia, $transportista, $vehiculos, $conductores, $items, $documentos_relacionados, $evento);
 firmar_xml($nombre_archivo . '.xml', $empresa['modo']);
+
+// La API de guias (GRE) de SUNAT NO tiene entorno beta: solo existe un servidor y lo que
+// se envia queda emitido de verdad. Por eso solo se envia con modo = 1 (produccion).
+// Con cualquier otro valor se genera y firma el XML, pero NO se envia.
+if ((string) $empresa['modo'] !== '1') {
+    $base = carpeta_actual() . '/files/facturacion_electronica/GUIA/';
+    echo json_encode(array('data' => array(
+        'error'                       => 'false',
+        'simulado'                    => true,
+        'respuesta_sunat_codigo'      => 'NO_ENVIADO',
+        'respuesta_sunat_descripcion' => 'Modo prueba (modo distinto de 1): la guia se genero y firmo pero NO se envio a SUNAT, porque la API de guias no tiene entorno beta. Use modo 1 para emitirla de verdad.',
+        'ruta_xml'                    => $base . 'FIRMA/' . $nombre_archivo . '.xml',
+    )), JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 ws_sunat_guia($empresa, $nombre_archivo);
 
 // =========================================================

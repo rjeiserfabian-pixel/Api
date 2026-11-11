@@ -508,7 +508,7 @@
                         "post_guia.php"
                     ]
                 },
-                "description": "Requiere credenciales GRE (client_id y client_secret) generadas en el portal de SUNAT."
+                "description": "Requiere credenciales GRE. OJO: SUNAT no tiene beta para guias. Con modo distinto de 1 solo se genera y firma (NO se envia); con modo 1 se emite de verdad."
             }
         }
     ],
