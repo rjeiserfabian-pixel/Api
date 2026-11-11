@@ -468,6 +468,10 @@ class Variables_diversas_model{
     
     //get file present
     public function carpeta_actual(){
+        // Si en .env se define API_BASE_URL (ej. https://midominio.com/API_SUNAT) se usa esa direccion.
+        if (function_exists('api_env') && api_env('API_BASE_URL')) {
+            return rtrim(api_env('API_BASE_URL'), '/');
+        }
         $archivo_actual = "http://" . $_SERVER["SERVER_NAME"] . $_SERVER["REQUEST_URI"];
         $dir = explode('/', $archivo_actual);
         

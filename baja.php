@@ -4,6 +4,7 @@ header("HTTP/1.1");
 date_default_timezone_set("America/Lima");
 
 require 'libraries/Numletras.php';
+require 'libraries/env.php';
 require 'libraries/Variables_diversas_model.php';
 require 'libraries/efactura.php';
 
@@ -39,7 +40,8 @@ firmar_xml($nombre_archivo.".xml", $empresa['modo'], 1);
 //cod_8: numero ticket
 
 //$ruta_dominio = "http://localhost/API_SUNAT";
-$ruta_dominio = "https://facturaciondirecta.com/API_SUNAT";
+$obj_variables_diversas_model = new variables_diversas_model();
+$ruta_dominio = $obj_variables_diversas_model->carpeta_actual();
 $user_sec_usu = ($empresa['modo'] == 0) ? 'MODDATOS' : $empresa['usu_secundario_user'];
 $user_sec_pass = ($empresa['modo'] == 0) ? 'moddatos' : $empresa['usu_secundario_password'];        
 $ws = $ruta_dominio."/ws_sunat/baja_envia_ticket.php?numero_documento=".$nombre_archivo."&cod_1=1&cod_2=".$empresa['modo']."&cod_3=".$empresa['ruc']."&cod_4=".$user_sec_usu."&cod_5=".$user_sec_pass."&cod_6=2";

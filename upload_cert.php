@@ -4,16 +4,23 @@
  * Permite subir certificados PEM o PFX de forma segura para entornos de Prueba o Producción.
  */
 
+require_once __DIR__ . '/libraries/env.php';
+require_once __DIR__ . '/libraries/errores.php';
+
+ini_set('session.cookie_httponly', '1');
+ini_set('session.cookie_samesite', 'Strict');
+ini_set('session.use_strict_mode', '1');
 session_start();
 
 // ==========================================
 // CONFIGURACIÓN DE SEGURIDAD
 // ==========================================
-// ¡IMPORTANTE! Cambiar esta contraseña para producción.
-define('ADMIN_USER', 'admin');
-// Hash de 'admin123' usando password_hash('admin123', PASSWORD_DEFAULT)
-// Se usa un hash para no tener la contraseña en texto plano.
-define('ADMIN_PASS_HASH', '$2y$10$..pIIPT1SuBpFzCKXMrSUeqUyryyu6B0Ch1o1BX2XFjtLLqdz/Eqy'); 
+// Las credenciales NO van en el código. Se leen del archivo .env (ver .env.example).
+// Si no están configuradas, el login queda deshabilitado (no hay clave por defecto).
+// Para generar el hash:  php -r "echo password_hash('TU_CLAVE_LARGA', PASSWORD_DEFAULT);"
+define('ADMIN_USER', (string) api_env('ADMIN_USER', ''));
+define('ADMIN_PASS_HASH', (string) api_env('ADMIN_PASS_HASH', ''));
+define('ADMIN_CONFIGURADO', ADMIN_USER !== '' && ADMIN_PASS_HASH !== '');
 
 // ==========================================
 // RUTAS DE DESTINO
@@ -34,13 +41,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // 1. Lógica de Login
     if ($action === 'login') {
+        if (!ADMIN_CONFIGURADO) {
+            http_response_code(503);
+            echo json_encode(['success' => false, 'message' => 'Acceso deshabilitado: falta configurar ADMIN_USER y ADMIN_PASS_HASH en el archivo .env']);
+            exit;
+        }
+
         $username = $_POST['username'] ?? '';
         $password = $_POST['password'] ?? '';
 
-        if ($username === ADMIN_USER && password_verify($password, ADMIN_PASS_HASH)) {
+        // hash_equals evita diferencias de tiempo al comparar el usuario
+        $usuario_ok = hash_equals(ADMIN_USER, (string) $username);
+        $clave_ok = password_verify((string) $password, ADMIN_PASS_HASH);
+
+        if ($usuario_ok && $clave_ok) {
+            session_regenerate_id(true);
             $_SESSION['auth_user'] = true;
             echo json_encode(['success' => true, 'message' => 'Login exitoso']);
         } else {
+            sleep(2); // frena los intentos de fuerza bruta
             http_response_code(401);
             echo json_encode(['success' => false, 'message' => 'Credenciales incorrectas']);
         }
@@ -90,6 +109,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 if ($key_file['error'] !== UPLOAD_ERR_OK || $cert_file['error'] !== UPLOAD_ERR_OK) {
                     throw new Exception("Error al subir los archivos al servidor.");
+                }
+
+                // Validar ANTES de sobrescribir: que sean PEM legibles y que la llave corresponda al certificado
+                $key_pem = file_get_contents($key_file['tmp_name']);
+                $cert_pem = file_get_contents($cert_file['tmp_name']);
+                $cert_res = @openssl_x509_read($cert_pem);
+                $key_res = @openssl_pkey_get_private($key_pem);
+                if ($cert_res === false) {
+                    throw new Exception("server.pem no es un certificado PEM valido. No se modifico nada.");
+                }
+                if ($key_res === false) {
+                    throw new Exception("server_key.pem no es una llave privada PEM valida. No se modifico nada.");
+                }
+                if (!openssl_x509_check_private_key($cert_res, $key_res)) {
+                    throw new Exception("La llave privada no corresponde al certificado. No se modifico nada.");
                 }
 
                 // Mover y renombrar
