@@ -1,0 +1,546 @@
+{
+    "info": {
+        "name": "API SUNAT - Referencia (beta)",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+        "description": "Casos de referencia (modo beta, empresa.modo=0). Tras cada cambio de codigo, reenviar: si SUNAT sigue aceptandolos, no se rompio nada. Completar en Postman las variables usuario_sol, clave_sol, gre_client_id y gre_client_secret; no guardarlas en el repositorio."
+    },
+    "item": [
+        {
+            "name": "01 Factura",
+            "event": [
+                {
+                    "listen": "prerequest",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "const d=new Date(Date.now()-5*3600*1000),iso=d.toISOString();",
+                            "pm.collectionVariables.set('fecha',iso.slice(0,10));",
+                            "pm.collectionVariables.set('fecha_compacta',iso.slice(0,10).replace(/-/g,''));",
+                            "pm.collectionVariables.set('numero',String(Math.floor(Date.now()/1000)%100000000).padStart(8,'0'));"
+                        ]
+                    }
+                }
+            ],
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                    }
+                ],
+                "body": {
+                    "mode": "raw",
+                    "raw": "{\n    \"empresa\": {\n        \"ruc\": \"{{ruc}}\",\n        \"razon_social\": \"MI EMPRESA S.A.C.\",\n        \"nombre_comercial\": \"MI EMPRESA\",\n        \"domicilio_fiscal\": \"AV. LIMA 123\",\n        \"ubigeo\": \"150101\",\n        \"departamento\": \"LIMA\",\n        \"provincia\": \"LIMA\",\n        \"distrito\": \"LIMA\",\n        \"modo\": 0,\n        \"usu_secundario_produccion_user\": \"{{usuario_sol}}\",\n        \"usu_secundario_produccion_password\": \"{{clave_sol}}\",\n        \"cuenta_detraccion\": \"\"\n    },\n    \"cliente\": {\n        \"codigo_tipo_entidad\": \"6\",\n        \"numero_documento\": \"20987654321\",\n        \"razon_social_nombres\": \"CLIENTE S.A.C.\",\n        \"cliente_direccion\": \"AV. CLIENTE 456\"\n    },\n    \"venta\": {\n        \"tipo_documento_codigo\": \"01\",\n        \"serie\": \"F001\",\n        \"fecha_vencimiento\": \"{{fecha}}\",\n        \"total_gravada\": 100,\n        \"total_igv\": 18,\n        \"fecha_emision\": \"{{fecha}}\",\n        \"hora_emision\": \"10:00:00\",\n        \"moneda_id\": 1,\n        \"forma_pago_id\": 1,\n        \"numero\": \"{{numero}}\",\n        \"total_exonerada\": null,\n        \"total_inafecta\": null,\n        \"total_gratuita\": null,\n        \"total_gratuita_igv\": null,\n        \"total_bolsa\": null,\n        \"orden_compra\": \"OC-001\",\n        \"nota\": \"Observaciones opcionales\",\n        \"detraccion_codigo\": \"\",\n        \"detraccion_porcentaje\": null,\n        \"percepcion_codigo\": \"\",\n        \"percepcion_porcentaje\": null,\n        \"retencion_porcentaje\": null\n    },\n    \"items\": [\n        {\n            \"codigo_producto\": \"PROD001\",\n            \"producto\": \"PRODUCTO DE EJEMPLO\",\n            \"codigo_sunat\": \"50202201\",\n            \"cantidad\": 2,\n            \"codigo_unidad\": \"NIU\",\n            \"precio_base\": 50,\n            \"tipo_igv_codigo\": \"10\",\n            \"descuento_precio_base\": 0,\n            \"bolsa\": false\n        }\n    ],\n    \"cuotas\": [],\n    \"guias_adjuntas\": [],\n    \"anticipos\": []\n}",
+                    "options": {
+                        "raw": {
+                            "language": "json"
+                        }
+                    }
+                },
+                "url": {
+                    "raw": "{{base_url}}/post.php",
+                    "host": [
+                        "{{base_url}}"
+                    ],
+                    "path": [
+                        "post.php"
+                    ]
+                },
+                "description": "Factura gravada al contado."
+            }
+        },
+        {
+            "name": "03 Boleta",
+            "event": [
+                {
+                    "listen": "prerequest",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "const d=new Date(Date.now()-5*3600*1000),iso=d.toISOString();",
+                            "pm.collectionVariables.set('fecha',iso.slice(0,10));",
+                            "pm.collectionVariables.set('fecha_compacta',iso.slice(0,10).replace(/-/g,''));",
+                            "pm.collectionVariables.set('numero',String(Math.floor(Date.now()/1000)%100000000).padStart(8,'0'));"
+                        ]
+                    }
+                }
+            ],
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                    }
+                ],
+                "body": {
+                    "mode": "raw",
+                    "raw": "{\n    \"empresa\": {\n        \"ruc\": \"{{ruc}}\",\n        \"razon_social\": \"MI EMPRESA S.A.C.\",\n        \"nombre_comercial\": \"MI EMPRESA\",\n        \"domicilio_fiscal\": \"AV. LIMA 123\",\n        \"ubigeo\": \"150101\",\n        \"departamento\": \"LIMA\",\n        \"provincia\": \"LIMA\",\n        \"distrito\": \"LIMA\",\n        \"modo\": 0,\n        \"usu_secundario_produccion_user\": \"{{usuario_sol}}\",\n        \"usu_secundario_produccion_password\": \"{{clave_sol}}\",\n        \"cuenta_detraccion\": \"\"\n    },\n    \"cliente\": {\n        \"codigo_tipo_entidad\": \"1\",\n        \"numero_documento\": \"12345678\",\n        \"razon_social_nombres\": \"JUAN PEREZ GARCIA\",\n        \"cliente_direccion\": \"AV. CLIENTE 456\"\n    },\n    \"venta\": {\n        \"tipo_documento_codigo\": \"03\",\n        \"serie\": \"B001\",\n        \"total_gravada\": 84.75,\n        \"total_igv\": 15.25,\n        \"fecha_emision\": \"{{fecha}}\",\n        \"hora_emision\": \"10:00:00\",\n        \"moneda_id\": 1,\n        \"forma_pago_id\": 1,\n        \"numero\": \"{{numero}}\",\n        \"total_exonerada\": null,\n        \"total_inafecta\": null\n    },\n    \"items\": [\n        {\n            \"codigo_producto\": \"PROD001\",\n            \"producto\": \"PRODUCTO DE EJEMPLO\",\n            \"codigo_sunat\": \"50202201\",\n            \"cantidad\": 1,\n            \"codigo_unidad\": \"NIU\",\n            \"precio_base\": 84.75,\n            \"tipo_igv_codigo\": \"10\"\n        }\n    ],\n    \"cuotas\": [],\n    \"guias_adjuntas\": [],\n    \"anticipos\": []\n}",
+                    "options": {
+                        "raw": {
+                            "language": "json"
+                        }
+                    }
+                },
+                "url": {
+                    "raw": "{{base_url}}/post.php",
+                    "host": [
+                        "{{base_url}}"
+                    ],
+                    "path": [
+                        "post.php"
+                    ]
+                },
+                "description": "Boleta de venta a DNI."
+            }
+        },
+        {
+            "name": "07 Nota de Credito",
+            "event": [
+                {
+                    "listen": "prerequest",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "const d=new Date(Date.now()-5*3600*1000),iso=d.toISOString();",
+                            "pm.collectionVariables.set('fecha',iso.slice(0,10));",
+                            "pm.collectionVariables.set('fecha_compacta',iso.slice(0,10).replace(/-/g,''));",
+                            "pm.collectionVariables.set('numero',String(Math.floor(Date.now()/1000)%100000000).padStart(8,'0'));"
+                        ]
+                    }
+                }
+            ],
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                    }
+                ],
+                "body": {
+                    "mode": "raw",
+                    "raw": "{\n    \"empresa\": {\n        \"ruc\": \"{{ruc}}\",\n        \"razon_social\": \"MI EMPRESA S.A.C.\",\n        \"nombre_comercial\": \"MI EMPRESA\",\n        \"domicilio_fiscal\": \"AV. LIMA 123\",\n        \"ubigeo\": \"150101\",\n        \"departamento\": \"LIMA\",\n        \"provincia\": \"LIMA\",\n        \"distrito\": \"LIMA\",\n        \"modo\": 0,\n        \"usu_secundario_produccion_user\": \"{{usuario_sol}}\",\n        \"usu_secundario_produccion_password\": \"{{clave_sol}}\",\n        \"cuenta_detraccion\": \"\"\n    },\n    \"cliente\": {\n        \"codigo_tipo_entidad\": \"6\",\n        \"numero_documento\": \"20987654321\",\n        \"razon_social_nombres\": \"CLIENTE S.A.C.\",\n        \"cliente_direccion\": \"AV. CLIENTE 456\"\n    },\n    \"venta\": {\n        \"tipo_documento_codigo\": \"07\",\n        \"serie\": \"FC01\",\n        \"total_gravada\": 50,\n        \"total_igv\": 9,\n        \"relacionado_serie\": \"F001\",\n        \"relacionado_numero\": \"00000001\",\n        \"relacionado_tipo_documento\": \"01\",\n        \"relacionado_motivo_codigo\": \"01\",\n        \"fecha_emision\": \"{{fecha}}\",\n        \"hora_emision\": \"10:00:00\",\n        \"moneda_id\": 1,\n        \"forma_pago_id\": 1,\n        \"numero\": \"{{numero}}\",\n        \"total_exonerada\": null,\n        \"total_inafecta\": null\n    },\n    \"items\": [\n        {\n            \"codigo_producto\": \"PROD001\",\n            \"producto\": \"DEVOLUCION PARCIAL\",\n            \"codigo_sunat\": \"50202201\",\n            \"cantidad\": 1,\n            \"codigo_unidad\": \"NIU\",\n            \"precio_base\": 50,\n            \"tipo_igv_codigo\": \"10\"\n        }\n    ],\n    \"cuotas\": [],\n    \"guias_adjuntas\": [],\n    \"anticipos\": []\n}",
+                    "options": {
+                        "raw": {
+                            "language": "json"
+                        }
+                    }
+                },
+                "url": {
+                    "raw": "{{base_url}}/post.php",
+                    "host": [
+                        "{{base_url}}"
+                    ],
+                    "path": [
+                        "post.php"
+                    ]
+                },
+                "description": "Referencia a la factura F001-00000001. Motivos 01 a 10."
+            }
+        },
+        {
+            "name": "08 Nota de Debito",
+            "event": [
+                {
+                    "listen": "prerequest",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "const d=new Date(Date.now()-5*3600*1000),iso=d.toISOString();",
+                            "pm.collectionVariables.set('fecha',iso.slice(0,10));",
+                            "pm.collectionVariables.set('fecha_compacta',iso.slice(0,10).replace(/-/g,''));",
+                            "pm.collectionVariables.set('numero',String(Math.floor(Date.now()/1000)%100000000).padStart(8,'0'));"
+                        ]
+                    }
+                }
+            ],
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                    }
+                ],
+                "body": {
+                    "mode": "raw",
+                    "raw": "{\n    \"empresa\": {\n        \"ruc\": \"{{ruc}}\",\n        \"razon_social\": \"MI EMPRESA S.A.C.\",\n        \"nombre_comercial\": \"MI EMPRESA\",\n        \"domicilio_fiscal\": \"AV. LIMA 123\",\n        \"ubigeo\": \"150101\",\n        \"departamento\": \"LIMA\",\n        \"provincia\": \"LIMA\",\n        \"distrito\": \"LIMA\",\n        \"modo\": 0,\n        \"usu_secundario_produccion_user\": \"{{usuario_sol}}\",\n        \"usu_secundario_produccion_password\": \"{{clave_sol}}\",\n        \"cuenta_detraccion\": \"\"\n    },\n    \"cliente\": {\n        \"codigo_tipo_entidad\": \"6\",\n        \"numero_documento\": \"20987654321\",\n        \"razon_social_nombres\": \"CLIENTE S.A.C.\",\n        \"cliente_direccion\": \"AV. CLIENTE 456\"\n    },\n    \"venta\": {\n        \"tipo_documento_codigo\": \"08\",\n        \"serie\": \"FD01\",\n        \"total_gravada\": 20,\n        \"total_igv\": 3.6,\n        \"relacionado_serie\": \"F001\",\n        \"relacionado_numero\": \"00000001\",\n        \"relacionado_tipo_documento\": \"01\",\n        \"relacionado_motivo_codigo\": \"01\",\n        \"fecha_emision\": \"{{fecha}}\",\n        \"hora_emision\": \"10:00:00\",\n        \"moneda_id\": 1,\n        \"forma_pago_id\": 1,\n        \"numero\": \"{{numero}}\",\n        \"total_exonerada\": null,\n        \"total_inafecta\": null\n    },\n    \"items\": [\n        {\n            \"codigo_producto\": \"SERV001\",\n            \"producto\": \"PENALIDAD POR INCUMPLIMIENTO\",\n            \"codigo_sunat\": \"84111506\",\n            \"cantidad\": 1,\n            \"codigo_unidad\": \"NIU\",\n            \"precio_base\": 20,\n            \"tipo_igv_codigo\": \"10\"\n        }\n    ],\n    \"cuotas\": [],\n    \"guias_adjuntas\": [],\n    \"anticipos\": []\n}",
+                    "options": {
+                        "raw": {
+                            "language": "json"
+                        }
+                    }
+                },
+                "url": {
+                    "raw": "{{base_url}}/post.php",
+                    "host": [
+                        "{{base_url}}"
+                    ],
+                    "path": [
+                        "post.php"
+                    ]
+                },
+                "description": "Referencia a la factura F001-00000001."
+            }
+        },
+        {
+            "name": "04 Liquidacion de Compra",
+            "event": [
+                {
+                    "listen": "prerequest",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "const d=new Date(Date.now()-5*3600*1000),iso=d.toISOString();",
+                            "pm.collectionVariables.set('fecha',iso.slice(0,10));",
+                            "pm.collectionVariables.set('fecha_compacta',iso.slice(0,10).replace(/-/g,''));",
+                            "pm.collectionVariables.set('numero',String(Math.floor(Date.now()/1000)%100000000).padStart(8,'0'));"
+                        ]
+                    }
+                }
+            ],
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                    }
+                ],
+                "body": {
+                    "mode": "raw",
+                    "raw": "{\n    \"empresa\": {\n        \"ruc\": \"{{ruc}}\",\n        \"razon_social\": \"MI EMPRESA S.A.C.\",\n        \"nombre_comercial\": \"MI EMPRESA\",\n        \"domicilio_fiscal\": \"AV. LIMA 123\",\n        \"ubigeo\": \"150101\",\n        \"departamento\": \"LIMA\",\n        \"provincia\": \"LIMA\",\n        \"distrito\": \"LIMA\",\n        \"modo\": 0,\n        \"usu_secundario_produccion_user\": \"{{usuario_sol}}\",\n        \"usu_secundario_produccion_password\": \"{{clave_sol}}\",\n        \"cuenta_detraccion\": \"\"\n    },\n    \"proveedor\": {\n        \"numero_documento\": \"12345678\",\n        \"nombres\": \"AGRICULTORA ROSA FLORES\",\n        \"direccion\": \"CALLE CAMPO 123\",\n        \"ubigeo\": \"120101\",\n        \"departamento\": \"JUNIN\",\n        \"provincia\": \"HUANCAYO\",\n        \"distrito\": \"HUANCAYO\"\n    },\n    \"lugar_operacion\": {\n        \"direccion\": \"CALLE CAMPO 123\",\n        \"ubigeo\": \"120101\",\n        \"departamento\": \"JUNIN\",\n        \"provincia\": \"HUANCAYO\",\n        \"distrito\": \"HUANCAYO\"\n    },\n    \"venta\": {\n        \"tipo_documento_codigo\": \"04\",\n        \"serie\": \"P001\",\n        \"fecha_emision\": \"{{fecha}}\",\n        \"hora_emision\": \"10:00:00\",\n        \"numero\": \"{{numero}}\",\n        \"forma_pago_id\": 1,\n        \"total_gravada\": 200,\n        \"total_igv\": 36,\n        \"nota\": \"Compra de productos agricolas\",\n        \"total_exonerada\": null,\n        \"total_inafecta\": null\n    },\n    \"items\": [\n        {\n            \"codigo_producto\": \"AG001\",\n            \"producto\": \"MAIZ AMARILLO DURO\",\n            \"codigo_sunat\": \"10011000\",\n            \"cantidad\": 100,\n            \"codigo_unidad\": \"KGM\",\n            \"precio_base\": 2,\n            \"tipo_igv_codigo\": \"10\"\n        }\n    ],\n    \"cuotas\": [],\n    \"guias_adjuntas\": []\n}",
+                    "options": {
+                        "raw": {
+                            "language": "json"
+                        }
+                    }
+                },
+                "url": {
+                    "raw": "{{base_url}}/liquidacion.php",
+                    "host": [
+                        "{{base_url}}"
+                    ],
+                    "path": [
+                        "liquidacion.php"
+                    ]
+                },
+                "description": "Compra a persona natural sin RUC."
+            }
+        },
+        {
+            "name": "20 Comprobante de Retencion",
+            "event": [
+                {
+                    "listen": "prerequest",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "const d=new Date(Date.now()-5*3600*1000),iso=d.toISOString();",
+                            "pm.collectionVariables.set('fecha',iso.slice(0,10));",
+                            "pm.collectionVariables.set('fecha_compacta',iso.slice(0,10).replace(/-/g,''));",
+                            "pm.collectionVariables.set('numero',String(Math.floor(Date.now()/1000)%100000000).padStart(8,'0'));"
+                        ]
+                    }
+                }
+            ],
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                    }
+                ],
+                "body": {
+                    "mode": "raw",
+                    "raw": "{\n    \"emisor\": {\n        \"ruc\": \"{{ruc}}\",\n        \"razon_social\": \"MI EMPRESA S.A.C.\",\n        \"nombre_comercial\": \"MI EMPRESA\",\n        \"domicilio_fiscal\": \"AV. LIMA 123\",\n        \"ubigeo\": \"150101\",\n        \"departamento\": \"LIMA\",\n        \"provincia\": \"LIMA\",\n        \"distrito\": \"LIMA\",\n        \"modo\": 0,\n        \"usu_secundario_produccion_user\": \"{{usuario_sol}}\",\n        \"usu_secundario_produccion_password\": \"{{clave_sol}}\",\n        \"urbanizacion\": \"URBANIZACION\"\n    },\n    \"proveedor\": {\n        \"ruc\": \"20987654321\",\n        \"razon_social\": \"PROVEEDOR S.A.C.\"\n    },\n    \"retencion\": {\n        \"serie\": \"R001\",\n        \"numero\": \"{{numero}}\",\n        \"fecha_de_emision\": \"{{fecha}}\",\n        \"codigo\": \"01\",\n        \"porcentaje\": 3,\n        \"nota\": \"Retencion segun regimen\",\n        \"total_retenido\": 35.4,\n        \"total_facturado_menos_retenido\": 1144.6\n    },\n    \"documento_relacionados\": [\n        {\n            \"relacionado_tipo_documento\": \"01\",\n            \"relacionado_serie\": \"F001\",\n            \"relacionado_numero\": \"00000001\",\n            \"relacionado_fecha_emision\": \"{{fecha}}\",\n            \"relacionado_monto_total\": 1180,\n            \"pago_numero\": \"1\",\n            \"pago_monto\": 1180,\n            \"pago_fecha\": \"{{fecha}}\",\n            \"retencion_monto\": 35.4,\n            \"retencion_fecha\": \"{{fecha}}\",\n            \"moneda\": \"1\",\n            \"moneda_tipo_cambio\": 1,\n            \"moneda_fecha_cambio\": \"{{fecha}}\"\n        }\n    ]\n}",
+                    "options": {
+                        "raw": {
+                            "language": "json"
+                        }
+                    }
+                },
+                "url": {
+                    "raw": "{{base_url}}/post_retencion.php",
+                    "host": [
+                        "{{base_url}}"
+                    ],
+                    "path": [
+                        "post_retencion.php"
+                    ]
+                },
+                "description": "Retencion 3% (codigo 01) o 6% (codigo 02)."
+            }
+        },
+        {
+            "name": "RA Comunicacion de Baja",
+            "event": [
+                {
+                    "listen": "prerequest",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "const d=new Date(Date.now()-5*3600*1000),iso=d.toISOString();",
+                            "pm.collectionVariables.set('fecha',iso.slice(0,10));",
+                            "pm.collectionVariables.set('fecha_compacta',iso.slice(0,10).replace(/-/g,''));",
+                            "pm.collectionVariables.set('numero',String(Math.floor(Date.now()/1000)%100000000).padStart(8,'0'));"
+                        ]
+                    }
+                }
+            ],
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                    }
+                ],
+                "body": {
+                    "mode": "raw",
+                    "raw": "{\n    \"empresa\": {\n        \"ruc\": \"{{ruc}}\",\n        \"razon_social\": \"MI EMPRESA S.A.C.\",\n        \"modo\": 0,\n        \"usu_secundario_user\": \"{{usuario_sol}}\",\n        \"usu_secundario_password\": \"{{clave_sol}}\"\n    },\n    \"anulacion\": {\n        \"correlativo_diario\": \"1\",\n        \"fecha_comprobante\": \"{{fecha}}\",\n        \"tipo_documento_codigo\": \"03\",\n        \"serie\": \"B001\",\n        \"numero\": \"00000001\"\n    }\n}",
+                    "options": {
+                        "raw": {
+                            "language": "json"
+                        }
+                    }
+                },
+                "url": {
+                    "raw": "{{base_url}}/baja.php",
+                    "host": [
+                        "{{base_url}}"
+                    ],
+                    "path": [
+                        "baja.php"
+                    ]
+                },
+                "description": "Solo comprobantes con menos de 7 dias. Devuelve un ticket. ATENCION: baja.php tiene una URL de otro servidor escrita en el codigo."
+            }
+        },
+        {
+            "name": "RC Resumen Diario de Boletas",
+            "event": [
+                {
+                    "listen": "prerequest",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "const d=new Date(Date.now()-5*3600*1000),iso=d.toISOString();",
+                            "pm.collectionVariables.set('fecha',iso.slice(0,10));",
+                            "pm.collectionVariables.set('fecha_compacta',iso.slice(0,10).replace(/-/g,''));",
+                            "pm.collectionVariables.set('numero',String(Math.floor(Date.now()/1000)%100000000).padStart(8,'0'));"
+                        ]
+                    }
+                }
+            ],
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                    }
+                ],
+                "body": {
+                    "mode": "raw",
+                    "raw": "{\n    \"empresa\": {\n        \"ruc\": \"{{ruc}}\",\n        \"razon_social\": \"MI EMPRESA S.A.C.\",\n        \"modo\": 0,\n        \"usu_secundario_user\": \"{{usuario_sol}}\",\n        \"usu_secundario_password\": \"{{clave_sol}}\"\n    },\n    \"resumen\": {\n        \"numero\": \"{{fecha_compacta}}\",\n        \"correlativo\": \"1\",\n        \"fecha_documentos\": \"{{fecha}}\",\n        \"fecha_resumen\": \"{{fecha}}\"\n    },\n    \"comprobantes\": [\n        {\n            \"tipo_documento\": \"03\",\n            \"serie\": \"B001\",\n            \"numero\": \"00000001\",\n            \"cliente_numero_documento\": \"12345678\",\n            \"cliente_tipo_documento\": \"1\",\n            \"total_a_pagar\": 118,\n            \"total_gravada\": 100,\n            \"total_igv\": 18,\n            \"total_exonerada\": \"\",\n            \"total_inafecta\": \"\",\n            \"total_gratuita\": \"\",\n            \"status\": \"1\"\n        }\n    ]\n}",
+                    "options": {
+                        "raw": {
+                            "language": "json"
+                        }
+                    }
+                },
+                "url": {
+                    "raw": "{{base_url}}/resumen.php",
+                    "host": [
+                        "{{base_url}}"
+                    ],
+                    "path": [
+                        "resumen.php"
+                    ]
+                },
+                "description": "status: 1 emitido, 2 anulado, 3 error."
+            }
+        },
+        {
+            "name": "Consultar ticket (resumen o baja)",
+            "event": [
+                {
+                    "listen": "prerequest",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "const d=new Date(Date.now()-5*3600*1000),iso=d.toISOString();",
+                            "pm.collectionVariables.set('fecha',iso.slice(0,10));",
+                            "pm.collectionVariables.set('fecha_compacta',iso.slice(0,10).replace(/-/g,''));",
+                            "pm.collectionVariables.set('numero',String(Math.floor(Date.now()/1000)%100000000).padStart(8,'0'));"
+                        ]
+                    }
+                }
+            ],
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                    }
+                ],
+                "body": {
+                    "mode": "raw",
+                    "raw": "{\n    \"empresa\": {\n        \"ruc\": \"{{ruc}}\",\n        \"razon_social\": \"MI EMPRESA S.A.C.\",\n        \"modo\": 0,\n        \"usu_secundario_user\": \"{{usuario_sol}}\",\n        \"usu_secundario_password\": \"{{clave_sol}}\"\n    },\n    \"anulacion\": {\n        \"corelativo\": \"1\",\n        \"fecha_ticket\": \"{{fecha}}\",\n        \"ticket\": \"{{ticket}}\"\n    }\n}",
+                    "options": {
+                        "raw": {
+                            "language": "json"
+                        }
+                    }
+                },
+                "url": {
+                    "raw": "{{base_url}}/resumen_ticket.php",
+                    "host": [
+                        "{{base_url}}"
+                    ],
+                    "path": [
+                        "resumen_ticket.php"
+                    ]
+                },
+                "description": "Consulta el resultado del ticket devuelto por baja o resumen. Pon el ticket en la variable {{ticket}}."
+            }
+        },
+        {
+            "name": "RR Reversion",
+            "event": [
+                {
+                    "listen": "prerequest",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "const d=new Date(Date.now()-5*3600*1000),iso=d.toISOString();",
+                            "pm.collectionVariables.set('fecha',iso.slice(0,10));",
+                            "pm.collectionVariables.set('fecha_compacta',iso.slice(0,10).replace(/-/g,''));",
+                            "pm.collectionVariables.set('numero',String(Math.floor(Date.now()/1000)%100000000).padStart(8,'0'));"
+                        ]
+                    }
+                }
+            ],
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                    }
+                ],
+                "body": {
+                    "mode": "raw",
+                    "raw": "{\n    \"empresa\": {\n        \"ruc\": \"{{ruc}}\",\n        \"razon_social\": \"MI EMPRESA S.A.C.\",\n        \"modo\": 0,\n        \"usu_secundario_produccion_user\": \"{{usuario_sol}}\",\n        \"usu_secundario_produccion_password\": \"{{clave_sol}}\"\n    },\n    \"reversion\": {\n        \"correlativo_diario\": \"1\",\n        \"fecha_resumen\": \"{{fecha}}\",\n        \"fecha_documentos\": \"{{fecha}}\"\n    },\n    \"documento_relacionados\": [\n        {\n            \"tipo_documento_codigo\": \"03\",\n            \"serie\": \"B001\",\n            \"numero\": \"00000001\",\n            \"descripcion\": \"ANULACION POR ERROR\"\n        }\n    ]\n}",
+                    "options": {
+                        "raw": {
+                            "language": "json"
+                        }
+                    }
+                },
+                "url": {
+                    "raw": "{{base_url}}/post_reversion.php",
+                    "host": [
+                        "{{base_url}}"
+                    ],
+                    "path": [
+                        "post_reversion.php"
+                    ]
+                },
+                "description": "Reversion."
+            }
+        },
+        {
+            "name": "09 Guia de Remision Remitente",
+            "event": [
+                {
+                    "listen": "prerequest",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "const d=new Date(Date.now()-5*3600*1000),iso=d.toISOString();",
+                            "pm.collectionVariables.set('fecha',iso.slice(0,10));",
+                            "pm.collectionVariables.set('fecha_compacta',iso.slice(0,10).replace(/-/g,''));",
+                            "pm.collectionVariables.set('numero',String(Math.floor(Date.now()/1000)%100000000).padStart(8,'0'));"
+                        ]
+                    }
+                }
+            ],
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                    }
+                ],
+                "body": {
+                    "mode": "raw",
+                    "raw": "{\n    \"empresa\": {\n        \"ruc\": \"{{ruc}}\",\n        \"razon_social\": \"MI EMPRESA S.A.C.\",\n        \"nombre_comercial\": \"MI EMPRESA\",\n        \"domicilio_fiscal\": \"AV. LIMA 123\",\n        \"ubigeo\": \"150101\",\n        \"departamento\": \"LIMA\",\n        \"provincia\": \"LIMA\",\n        \"distrito\": \"LIMA\",\n        \"modo\": \"0\",\n        \"usu_secundario_produccion_user\": \"{{usuario_sol}}\",\n        \"usu_secundario_produccion_password\": \"{{clave_sol}}\",\n        \"urbanizacion\": \"\",\n        \"gre_client_id\": \"{{gre_client_id}}\",\n        \"gre_client_secret\": \"{{gre_client_secret}}\"\n    },\n    \"remitente\": {\n        \"codigo_tipo_entidad\": \"6\",\n        \"numero_documento\": \"{{ruc}}\",\n        \"razon_social_nombres\": \"MI EMPRESA S.A.C.\"\n    },\n    \"destinatario\": {\n        \"codigo_tipo_entidad\": \"1\",\n        \"numero_documento\": \"12345678\",\n        \"razon_social_nombres\": \"JUAN PEREZ GARCIA\"\n    },\n    \"guia\": {\n        \"tipo_documento_codigo\": \"09\",\n        \"serie\": \"T001\",\n        \"numero\": \"{{numero}}\",\n        \"fecha_emision\": \"{{fecha}}\",\n        \"hora_emision\": \"07:00:00\",\n        \"fecha_entrega_bienes_transportista\": \"{{fecha}}\",\n        \"fecha_inicio_traslado\": \"{{fecha}}\",\n        \"motivo_traslado_codigo\": \"01\",\n        \"peso_total\": 5,\n        \"unidad_peso\": \"KGM\",\n        \"cantidad_bultos\": 1,\n        \"direccion_partida\": \"AV. LIMA 123\",\n        \"ubigeo_partida\": \"150101\",\n        \"direccion_llegada\": \"AV. CLIENTE 456\",\n        \"ubigeo_llegada\": \"150101\",\n        \"transporte_publico\": false,\n        \"observacion\": \"\"\n    },\n    \"transportista\": {},\n    \"vehiculos\": [\n        {\n            \"placa\": \"ABC123\",\n            \"principal\": true\n        }\n    ],\n    \"conductores\": [\n        {\n            \"tipo_documento\": \"1\",\n            \"numero_documento\": \"12345678\",\n            \"nombres\": \"JUAN\",\n            \"apellidos\": \"PEREZ GARCIA\",\n            \"licencia\": \"Q12345678\",\n            \"principal\": true\n        }\n    ],\n    \"items\": [\n        {\n            \"codigo_producto\": \"cc1\",\n            \"producto\": \"PRODUCTO DE EJEMPLO\",\n            \"codigo_sunat\": \"43211503\",\n            \"cantidad\": 1,\n            \"codigo_unidad\": \"NIU\"\n        }\n    ],\n    \"documentos_relacionados\": [\n        {\n            \"tipo_documento\": \"03\",\n            \"serie\": \"B001\",\n            \"numero\": \"00000005\",\n            \"ruc_emisor\": \"{{ruc}}\"\n        }\n    ],\n    \"evento\": {}\n}",
+                    "options": {
+                        "raw": {
+                            "language": "json"
+                        }
+                    }
+                },
+                "url": {
+                    "raw": "{{base_url}}/post_guia.php",
+                    "host": [
+                        "{{base_url}}"
+                    ],
+                    "path": [
+                        "post_guia.php"
+                    ]
+                },
+                "description": "Requiere credenciales GRE (client_id y client_secret) generadas en el portal de SUNAT."
+            }
+        }
+    ],
+    "variable": [
+        {
+            "key": "base_url",
+            "value": "http://localhost/API_SUNAT"
+        },
+        {
+            "key": "ruc",
+            "value": "20000000001"
+        },
+        {
+            "key": "usuario_sol",
+            "value": "MODDATOS"
+        },
+        {
+            "key": "clave_sol",
+            "value": "moddatos"
+        },
+        {
+            "key": "gre_client_id",
+            "value": ""
+        },
+        {
+            "key": "gre_client_secret",
+            "value": ""
+        },
+        {
+            "key": "ticket",
+            "value": ""
+        },
+        {
+            "key": "numero",
+            "value": ""
+        },
+        {
+            "key": "fecha",
+            "value": ""
+        },
+        {
+            "key": "fecha_compacta",
+            "value": ""
+        }
+    ]
+}
