@@ -28,6 +28,7 @@ function claseEstado($e)
 class Vista
 {
     public static $base = '';
+    public static $dir = null;   // carpeta de plantillas (por defecto la del portal)
 
     public static function url($ruta)
     {
@@ -40,8 +41,8 @@ class Vista
         $datos['_menu'] = $conMenu;
         extract($datos, EXTR_SKIP);
         ob_start();
-        include __DIR__ . '/../views/' . $vista . '.php';
+        include (self::$dir !== null ? self::$dir : __DIR__ . '/../views') . '/' . $vista . '.php';
         $contenido = ob_get_clean();
-        include __DIR__ . '/../views/_layout.php';
+        include (self::$dir !== null ? self::$dir : __DIR__ . '/../views') . '/_layout.php';
     }
 }

@@ -189,6 +189,10 @@ class Db
         if (!self::columnaExiste('documentos', 'cuota')) {
             self::pdo()->exec('ALTER TABLE documentos ADD COLUMN cuota VARCHAR(7) NULL');
         }
+        // Planes: 1 = el cliente puede cambiarse a este plan por su cuenta desde el portal (sin aprobacion del operador)
+        if (!self::columnaExiste('planes', 'autoservicio')) {
+            self::pdo()->exec('ALTER TABLE planes ADD COLUMN autoservicio INTEGER NOT NULL DEFAULT 0');
+        }
     }
 
     /** Si falta el esquema nuevo (despues de actualizar el codigo), lo crea. Barato: 2 consultas. */
@@ -204,6 +208,9 @@ class Db
             self::pdo()->query('SELECT 1 FROM limites LIMIT 1');
             self::pdo()->query('SELECT 1 FROM usuarios_portal LIMIT 1');
             self::pdo()->query('SELECT 1 FROM auditoria LIMIT 1');
+            self::pdo()->query('SELECT autoservicio FROM planes LIMIT 1');
+            self::pdo()->query('SELECT 1 FROM operadores LIMIT 1');
+            self::pdo()->query('SELECT 1 FROM solicitudes_plan LIMIT 1');
         } catch (PDOException $e) {
             self::crearEsquema();
         }
@@ -397,6 +404,33 @@ class Db
             creado VARCHAR(19) NOT NULL
         )");
         self::indice('CREATE INDEX idx_auditoria_empresa ON auditoria (empresa_id, id)');
+
+        // Panel del operador (dueno del servicio): cuentas propias, distintas de las de los clientes; y solicitudes de cambio de plan
+        $pdo->exec("CREATE TABLE IF NOT EXISTS operadores (
+            id $pk,
+            email VARCHAR(190) NOT NULL UNIQUE,
+            nombre VARCHAR(120) NOT NULL,
+            clave_hash VARCHAR(255) NOT NULL,
+            debe_cambiar INTEGER NOT NULL DEFAULT 1,
+            activo INTEGER NOT NULL DEFAULT 1,
+            intentos_fallidos INTEGER NOT NULL DEFAULT 0,
+            bloqueado_hasta VARCHAR(19) NULL,
+            ultimo_acceso VARCHAR(19) NULL,
+            creado VARCHAR(19) NOT NULL
+        )");
+        $pdo->exec("CREATE TABLE IF NOT EXISTS solicitudes_plan (
+            id $pk,
+            empresa_id INTEGER NOT NULL,
+            usuario_id INTEGER NULL,
+            plan_id INTEGER NOT NULL,
+            estado VARCHAR(12) NOT NULL,
+            nota VARCHAR(200) NULL,
+            creado VARCHAR(19) NOT NULL,
+            resuelto VARCHAR(19) NULL,
+            resuelto_por VARCHAR(190) NULL
+        )");
+        self::indice('CREATE INDEX idx_solicitudes_estado ON solicitudes_plan (estado, id)');
+        self::indice('CREATE INDEX idx_solicitudes_empresa ON solicitudes_plan (empresa_id, id)');
 
         self::migrar();
     }

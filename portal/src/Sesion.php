@@ -8,6 +8,11 @@ class Sesion
     const INACTIVIDAD = 1800;   // 30 min sin actividad
     const ABSOLUTA = 28800;     // 8 h desde que entro
 
+    // Cada aplicacion (portal de clientes, panel del operador) tiene SU cookie y SU carpeta de sesiones: una sesion de una
+    // nunca puede ser presentada ante la otra.
+    public static $nombre = 'portal_sid';
+    public static $subcarpeta = 'sessions';
+
     public static function esHttps()
     {
         if (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') {
@@ -28,12 +33,12 @@ class Sesion
         if (session_status() === PHP_SESSION_ACTIVE) {
             return;
         }
-        $dir = dirname(__DIR__, 2) . '/storage/sessions'; // fuera del alcance web (storage/ esta bloqueada) y aparte de otras sesiones
+        $dir = dirname(__DIR__, 2) . '/storage/' . self::$subcarpeta; // fuera del alcance web (storage/ esta bloqueada) y aparte de otras sesiones
         if (!is_dir($dir)) {
             @mkdir($dir, 0700, true);
         }
         session_save_path($dir);
-        session_name('portal_sid');
+        session_name(self::$nombre);
         ini_set('session.use_strict_mode', '1');
         ini_set('session.use_only_cookies', '1');
         ini_set('session.use_trans_sid', '0');
@@ -56,6 +61,15 @@ class Sesion
         if (isset($_SESSION['t_inicio'])) {
             $_SESSION['t_ultimo'] = $ahora;
         }
+    }
+
+    /**
+     * Huella de la contrasena vigente. Se guarda en la sesion al entrar: si la contrasena cambia o el operador la restablece,
+     * TODAS las demas sesiones abiertas de esa cuenta dejan de valer.
+     */
+    public static function huellaClave($claveHash)
+    {
+        return substr(hash('sha256', 'ch|' . $claveHash), 0, 24);
     }
 
     private static function huellaNavegador()

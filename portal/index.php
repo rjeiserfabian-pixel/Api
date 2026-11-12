@@ -8,7 +8,7 @@ require_once $raiz . '/libraries/env.php';
 foreach (array('Respuesta', 'Db', 'Crypto', 'Auth', 'Certificados', 'Validador', 'Motor', 'Series', 'Planes', 'Documentos', 'Webhooks') as $c) {
     require_once $raiz . '/v1/src/' . $c . '.php';
 }
-foreach (array('Vista', 'Sesion', 'Usuarios') as $c) {
+foreach (array('Vista', 'Sesion', 'Usuarios', 'Suscripciones') as $c) {
     require_once __DIR__ . '/src/' . $c . '.php';
 }
 date_default_timezone_set('America/Lima');
@@ -104,7 +104,9 @@ if ($ruta === '/login') {
             Sesion::flash('error', 'Correo o contraseña incorrectos, o cuenta bloqueada temporalmente.'); // mismo mensaje ante cualquier fallo
             pagina('login', array('email' => substr($email, 0, 190), 'expirada' => null), false, 401);
         }
+        $u = Usuarios::porId($u['id']); // (la contrasena pudo re-cifrarse al autenticar)
         Sesion::entrar($u['id']);
+        $_SESSION['ch'] = Sesion::huellaClave($u['clave_hash']);
         ir($u['debe_cambiar'] ? '/cuenta' : '/');
     }
     $exp = isset($_SESSION['expirada']) ? $_SESSION['expirada'] : null;
@@ -124,6 +126,10 @@ $entorno = (isset($_SESSION['entorno']) && $_SESSION['entorno'] === 'live') ? 'l
 $ctx = array('empresa' => $empresa, 'key' => array('id' => 0, 'entorno' => $entorno)); // lo unico que usa el dominio: la empresa de la SESION
 $empresaId = (int) $empresa['id'];
 $esAdmin = $usuario['rol'] === 'admin';
+if (isset($_SESSION['ch']) && !hash_equals($_SESSION['ch'], Sesion::huellaClave($usuario['clave_hash']))) {
+    Sesion::destruir(); // la contrasena cambio desde otra sesion o el operador la restablecio
+    ir('/login');
+}
 
 if ($ruta === '/logout' && $metodo === 'POST') {
     Auditoria::registrar($empresaId, $usuario['id'], 'logout', '');
@@ -170,7 +176,7 @@ function leerArchivo($campo, $maximo = 102400)
 // ---------------------------------------------------------------- paginas
 if ($ruta === '/entorno' && $metodo === 'POST') {
     $_SESSION['entorno'] = (isset($_POST['entorno']) && $_POST['entorno'] === 'live') ? 'live' : 'test';
-    $permitidas = array('/', '/documentos', '/llaves', '/webhooks', '/certificado', '/credenciales', '/cuenta', '/actividad');
+    $permitidas = array('/', '/documentos', '/llaves', '/webhooks', '/certificado', '/credenciales', '/plan', '/cuenta', '/actividad');
     ir(in_array(isset($_POST['volver']) ? $_POST['volver'] : '', $permitidas, true) ? $_POST['volver'] : '/');
 }
 
@@ -427,6 +433,30 @@ if ($ruta === '/credenciales/guardar' && $metodo === 'POST') {
     ir('/credenciales');
 }
 
+// ---- plan (el cliente puede pedir un cambio; los planes de autoservicio se activan al instante, los demas los aprueba el operador)
+if ($ruta === '/plan' && $metodo === 'GET') {
+    pagina('plan', array('titulo' => 'Mi plan', 'seccion' => 'plan', 'esAdmin' => $esAdmin, 'uso' => Planes::uso($ctx), 'planes' => Suscripciones::planesActivos(),
+        'pendiente' => Suscripciones::pendienteDe($empresaId), 'planActualId' => $empresa['plan_id'] === null ? 0 : (int) $empresa['plan_id']));
+}
+if ($ruta === '/plan/solicitar' && $metodo === 'POST') {
+    soloAdmin();
+    confirmarOVolver('/plan');
+    $planId = isset($_POST['plan_id']) && ctype_digit((string) $_POST['plan_id']) ? (int) $_POST['plan_id'] : 0;
+    try {
+        $r = Suscripciones::solicitar($empresa, $usuario, $planId, isset($_POST['nota']) ? (string) $_POST['nota'] : '');
+        Sesion::flash('ok', $r === 'automatica' ? 'Listo: su plan ya cambió.' : 'Solicitud enviada. El administrador del servicio la revisará y la activará.');
+    } catch (InvalidArgumentException $x) {
+        Sesion::flash('error', $x->getMessage());
+    }
+    ir('/plan');
+}
+if ($ruta === '/plan/cancelar' && $metodo === 'POST') {
+    soloAdmin();
+    Suscripciones::cancelar($empresaId, $usuario['id']);
+    Sesion::flash('ok', 'Solicitud cancelada.');
+    ir('/plan');
+}
+
 // ---- actividad y cuenta
 if ($ruta === '/actividad' && $metodo === 'GET') {
     soloAdmin();
@@ -453,6 +483,7 @@ if ($ruta === '/cuenta/clave' && $metodo === 'POST') {
     }
     Usuarios::cambiarClave($usuario, $nueva);
     session_regenerate_id(true); // identificador nuevo tras un cambio de credenciales
+    $_SESSION['ch'] = Sesion::huellaClave(Usuarios::porId($usuario['id'])['clave_hash']);
     Sesion::flash('ok', 'Contraseña actualizada.');
     ir('/');
 }

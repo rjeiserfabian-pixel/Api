@@ -250,7 +250,23 @@ Direccion: `/portal/`. Cada cliente entra con su correo y contrasena y ve **solo
 - **Seguridad**: contrasenas con hash bcrypt; bloqueo de 15 min tras 5 fallos y limite por IP; sesion de 30 min de inactividad (8 h maximo); proteccion CSRF; politica CSP estricta (sin scripts en linea); las llaves API y secretos de webhook se muestran **una sola vez**; las credenciales SUNAT son de solo escritura; acciones sensibles piden la contrasena otra vez; todo queda en el registro de actividad.
 - **En produccion** active `PORTAL_REQUIERE_HTTPS=1` (ver `.env.example`) y sirvalo siempre por HTTPS.
 - Prueba automatica de seguridad: `php docs/probar_portal.php` (crea y borra dos empresas de laboratorio).
-## 11. Probar que todo funciona
+## 11. Panel del operador
+
+Direccion: `/operador/` (solo para usted, el dueno del servicio; es una aplicacion aparte del portal de clientes, con cuentas, cookie y sesiones propias).
+
+- **Crear su cuenta** (una vez, por consola): `php bin/admin.php operador:crear --email=usted@correo.com --nombre="Su nombre"`. Muestra una contrasena temporal una sola vez; al entrar debe cambiarla. Si la olvida: `operador:reset --email=...`.
+- **Resumen**: estado del worker (activo / lento / detenido, con el ultimo latido), trabajo pendiente (reintentos y avisos), empresas cerca de su cuota, empresas sin plan.
+- **Empresas**: listado con plan y consumo del mes; ficha con datos, certificados, llaves, consumo de meses anteriores, usuarios y actividad. Desde ahi asigna el plan, crea usuarios, restablece contrasenas y activa/desactiva la empresa. **Nuevo cliente** crea la empresa, su plan y su primer administrador en un solo paso (el cliente carga luego sus credenciales SUNAT y su certificado en su portal).
+- **Usuarios**: todos los usuarios de clientes; restablecer contrasena (genera una temporal, desbloquea y **cierra las sesiones abiertas** de esa cuenta) y activar/desactivar.
+- **Planes**: crear y editar planes (cuota mensual, emisiones/min, peticiones/min, webhooks). Los cambios aplican de inmediato a las empresas que lo tienen. Un plan con empresas no se puede desactivar (una empresa sin plan activo queda sin limites).
+- **Como se asigna un plan**:
+  1. *Usted* lo asigna en la ficha de la empresa (siempre disponible).
+  2. *El cliente lo pide* desde su portal (**Mi plan**). Si el plan esta marcado **autoservicio** se activa al instante; si no, queda como **solicitud** que usted aprueba o rechaza en *Solicitudes de plan*. Mientras no exista cobro automatico, deje los planes de pago sin autoservicio (los activa usted al confirmar el pago) y use autoservicio solo para planes gratuitos (p. ej. Prueba).
+  3. *Un pago confirmado* (futuro): la pasarela llamara a la misma funcion (`Suscripciones::asignar`), sin intervencion suya.
+- **Seguridad**: bloqueo de 15 min tras 5 fallos y limite por IP; sesion de 30 min de inactividad; CSRF; CSP estricta; las acciones sensibles (crear/restablecer/desactivar usuarios, desactivar empresas, quitar un plan, crear clientes) piden su contrasena otra vez; cada cambio queda en la actividad de la empresa (el cliente ve que fue el operador). Opcional: `OPERADOR_IPS_PERMITIDAS` en `.env` limita el panel a sus IP; en produccion active tambien `PORTAL_REQUIERE_HTTPS=1`.
+- **Estado del worker**: el worker escribe un latido en cada ciclo; el panel lo muestra en todas las paginas. El worker **no se enciende desde la web**: se deja programado una vez en el servidor (Windows: Programador de tareas "al iniciar el sistema"; Linux: servicio systemd). Si aparece "DETENIDO", los reintentos y los webhooks estan parados.
+- Prueba automatica: `php docs/probar_operador.php` (crea y borra empresas, operador y planes de laboratorio).
+## 12. Probar que todo funciona
 
 ```bash
 # Prueba real: ejecuta los ejemplos contra la API y verifica los resultados (usa SUNAT beta)
@@ -270,7 +286,7 @@ Rechaza llaves `sk_live_` a propósito. Úsela **después de cada cambio**: si t
 
 También puede importar `postman/API_SUNAT_v1.postman_collection.json` en Postman (44 peticiones con tests automáticos): ponga su llave de prueba en la variable `api_key` y ejecute primero «00 Iniciar tanda de numeros».
 
-## 12. Administración (solo línea de comandos)
+## 13. Administración (solo línea de comandos)
 
 ```bash
 php bin/admin.php init                       # prepara base de datos y claves (una vez)
@@ -284,6 +300,7 @@ php bin/admin.php serie:listar [--ruc=…] [--entorno=test|live]
 php bin/worker.php [--una-vez]                # reintentos y webhooks (dejarlo siempre encendido)
 php bin/admin.php plan:sembrar | plan:crear | plan:listar | empresa:plan | uso:ver   # planes, limites y cuota (seccion 8)
 php bin/admin.php usuario:crear --ruc=… --email=… --nombre="…" [--rol=admin|lector]   # acceso al portal (clave TEMPORAL, se muestra una vez)
+php bin/admin.php operador:crear --email=… --nombre="…"   # cuenta del panel /operador/ (clave TEMPORAL); operador:listar | operador:reset --email=…
 php bin/admin.php usuario:listar | usuario:reset --email=… | usuario:desactivar --email=… | usuario:activar --email=…
 ```
 
@@ -310,7 +327,7 @@ php docs/probar.php --key=sk_test_XXXX && php docs/probar_numeracion.php --key=s
 
 Respalde la base y `APP_KEY` juntas: los secretos guardados solo se descifran con esa llave.
 
-## 13. Regenerar la documentación
+## 14. Regenerar la documentación
 
 Los ejemplos viven en `docs/ejemplos.php` (única fuente). Si cambia algo:
 
@@ -320,7 +337,7 @@ php postman/gen_v1.php            # colección de Postman
 php docs/probar.php --key=sk_test_…   # confirma que los ejemplos siguen funcionando
 ```
 
-## 14. Limitaciones conocidas
+## 15. Limitaciones conocidas
 
 - Un número **reservado** que nunca se envía queda como hueco en la serie (todavía no hay una operación para liberarlo).
 - Los tickets de **resumen, baja y reversión** no se resuelven solos (solo los de guías): se consultan con `POST /tickets`.

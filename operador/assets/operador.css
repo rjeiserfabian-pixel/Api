@@ -1,0 +1,11 @@
+/* Panel del operador: completa el estilo del portal (portal/assets/portal.css) */
+.modo-operador .lateral { border-top: 4px solid #7b3fe4; }
+.etiqueta-op { display: inline-block; font-size: 10px; letter-spacing: .08em; padding: 2px 6px; border-radius: 4px; background: #7b3fe4; color: #fff; vertical-align: middle; }
+.contenido { max-width: 1250px; }
+input.corto { max-width: 150px; }
+input.num { max-width: 90px; }
+td form { margin: 0 0 6px; }
+td input[type=password] { max-width: 150px; padding: 5px 8px; }
+td input[type=text] { padding: 5px 8px; }
+input[type=checkbox] { width: 18px; height: 18px; }
+a.badge { text-decoration: none; }

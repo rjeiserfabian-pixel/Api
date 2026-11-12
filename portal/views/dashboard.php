@@ -9,7 +9,8 @@ $claseBarra = $pct >= 100 ? 'critico' : ($pct >= 80 ? 'alerta' : '');
     <div class="etiqueta">Plan</div>
     <div class="cifra"><?= h($uso['plan']['nombre'] === 'sin_plan' ? 'Sin plan' : $uso['plan']['nombre']) ?></div>
     <div class="ayuda">Emisiones/min: <?= h($uso['plan']['limite_emisiones_por_minuto'] === null ? 'sin límite' : $uso['plan']['limite_emisiones_por_minuto']) ?> ·
-      Peticiones/min: <?= h($uso['plan']['limite_peticiones_por_minuto'] === null ? 'sin límite' : $uso['plan']['limite_peticiones_por_minuto']) ?></div>
+      Peticiones/min: <?= h($uso['plan']['limite_peticiones_por_minuto'] === null ? 'sin límite' : $uso['plan']['limite_peticiones_por_minuto']) ?>
+      · <a href="<?= h(Vista::url('/plan')) ?>">Cambiar de plan</a></div>
   </div>
   <div class="tarjeta">
     <div class="etiqueta">Cuota de <?= h($uso['periodo']) ?> (producción)</div>

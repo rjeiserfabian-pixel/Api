@@ -22,6 +22,7 @@
  *   php bin/admin.php uso:ver [--ruc=20123456789]       # consumo del mes (solo llaves live)
  *   php bin/admin.php usuario:crear --ruc=20123456789 --email=cliente@empresa.com --nombre="Nombre" [--rol=admin|lector]   # acceso al portal; muestra una clave TEMPORAL
  *   php bin/admin.php usuario:listar [--ruc=...] | usuario:reset --email=... | usuario:desactivar --email=... | usuario:activar --email=...
+ *   php bin/admin.php operador:crear --email=usted@correo.com --nombre="Su nombre"   # cuenta para el panel /operador/ (clave TEMPORAL); operador:listar | operador:reset --email=...
  *   php bin/admin.php db:copiar --dsn="pgsql:host=127.0.0.1;port=5432;dbname=api_sunat" --user=... --pass=...
  *        Copia TODOS los datos de la base actual (la de DB_DSN o SQLite) a otra base VACIA (ej. PostgreSQL).
  *        No modifica el origen. Despues, cambie DB_DSN/DB_USER/DB_PASS en .env para usar la nueva base.
@@ -36,6 +37,7 @@ foreach (array('Respuesta', 'Db', 'Crypto', 'Auth', 'Series', 'Planes') as $c) {
     require_once $raiz . '/v1/src/' . $c . '.php';
 }
 require_once $raiz . '/portal/src/Usuarios.php';
+require_once $raiz . '/operador/src/Operadores.php';
 date_default_timezone_set('America/Lima');
 
 function salir($msg, $codigo = 1)
@@ -226,7 +228,7 @@ switch ($cmd) {
 
     case 'db:copiar':
         exigir($o, array('dsn'));
-        $tablas = array('planes', 'empresas', 'api_keys', 'certificados', 'series', 'documentos', 'uso', 'webhooks', 'eventos', 'entregas', 'usuarios_portal', 'auditoria'); // (limites es transitoria: no se copia)
+        $tablas = array('planes', 'empresas', 'api_keys', 'certificados', 'series', 'documentos', 'uso', 'webhooks', 'eventos', 'entregas', 'usuarios_portal', 'auditoria', 'operadores', 'solicitudes_plan'); // (limites es transitoria: no se copia)
         $origen = Db::pdo();
         $motorOrigen = $origen->getAttribute(PDO::ATTR_DRIVER_NAME);
         Db::asegurarEsquema();
@@ -297,8 +299,8 @@ switch ($cmd) {
                 echo "  ya existe: {$p['nombre']}" . PHP_EOL;
                 continue;
             }
-            Db::ejecutar('INSERT INTO planes (nombre, cuota_mensual, limite_sunat_min, limite_general_min, max_webhooks, activo, creado) VALUES (?,?,?,?,?,1,?)',
-                array($p['nombre'], $p['cuota_mensual'], $p['limite_sunat_min'], $p['limite_general_min'], $p['max_webhooks'], Db::ahora()));
+            Db::ejecutar('INSERT INTO planes (nombre, cuota_mensual, limite_sunat_min, limite_general_min, max_webhooks, autoservicio, activo, creado) VALUES (?,?,?,?,?,?,1,?)',
+                array($p['nombre'], $p['cuota_mensual'], $p['limite_sunat_min'], $p['limite_general_min'], $p['max_webhooks'], isset($p['autoservicio']) ? (int) $p['autoservicio'] : 0, Db::ahora()));
             echo "  creado: {$p['nombre']}" . PHP_EOL;
         }
         echo "Listo. Vea los planes con: php bin/admin.php plan:listar" . PHP_EOL;
@@ -320,6 +322,7 @@ switch ($cmd) {
             return (int) $o[$clave];
         };
         $existe = Db::uno('SELECT * FROM planes WHERE nombre = ?', array($o['nombre']));
+        $auto = isset($o['autoservicio']) ? (in_array($o['autoservicio'], array('1', 'si', 'true'), true) ? 1 : 0) : ($existe ? (int) $existe['autoservicio'] : 0);
         $cuota = $num('cuota', $existe ? ($existe['cuota_mensual'] === null ? null : (int) $existe['cuota_mensual']) : null);
         $sunat = $num('sunat-min', $existe ? ($existe['limite_sunat_min'] === null ? null : (int) $existe['limite_sunat_min']) : 20);
         $gral = $num('general-min', $existe ? ($existe['limite_general_min'] === null ? null : (int) $existe['limite_general_min']) : 120);
@@ -328,10 +331,10 @@ switch ($cmd) {
             salir('--webhooks debe ser un entero de 1 en adelante.');
         }
         if ($existe) {
-            Db::ejecutar('UPDATE planes SET cuota_mensual = ?, limite_sunat_min = ?, limite_general_min = ?, max_webhooks = ?, activo = 1 WHERE id = ?', array($cuota, $sunat, $gral, $wh, $existe['id']));
+            Db::ejecutar('UPDATE planes SET cuota_mensual = ?, limite_sunat_min = ?, limite_general_min = ?, max_webhooks = ?, autoservicio = ?, activo = 1 WHERE id = ?', array($cuota, $sunat, $gral, $wh, $auto, $existe['id']));
             echo "Plan {$o['nombre']} actualizado (aplica de inmediato a sus empresas)." . PHP_EOL;
         } else {
-            Db::ejecutar('INSERT INTO planes (nombre, cuota_mensual, limite_sunat_min, limite_general_min, max_webhooks, activo, creado) VALUES (?,?,?,?,?,1,?)', array($o['nombre'], $cuota, $sunat, $gral, $wh, Db::ahora()));
+            Db::ejecutar('INSERT INTO planes (nombre, cuota_mensual, limite_sunat_min, limite_general_min, max_webhooks, autoservicio, activo, creado) VALUES (?,?,?,?,?,?,1,?)', array($o['nombre'], $cuota, $sunat, $gral, $wh, $auto, Db::ahora()));
             echo "Plan {$o['nombre']} creado." . PHP_EOL;
         }
         echo '  cuota mensual: ' . ($cuota === null ? 'ilimitada' : $cuota) . ' | emisiones/min: ' . ($sunat === null ? 'sin limite' : $sunat) . ' | peticiones/min: ' . ($gral === null ? 'sin limite' : $gral) . ' | webhooks: ' . $wh . PHP_EOL;
@@ -432,6 +435,38 @@ switch ($cmd) {
         echo ($act ? 'Usuario activado: ' : 'Usuario desactivado (ya no puede ingresar): ') . $u['email'] . PHP_EOL;
         break;
 
+    case 'operador:crear':
+        exigir($o, array('email', 'nombre'));
+        Db::asegurarEsquema();
+        try {
+            $clave = Operadores::crear($o['email'], $o['nombre']);
+        } catch (InvalidArgumentException $x) {
+            salir($x->getMessage());
+        }
+        echo "Operador creado: " . strtolower($o['email']) . PHP_EOL . PHP_EOL
+            . "  Contrasena TEMPORAL (se muestra una sola vez; deberá cambiarla al ingresar a /operador/):" . PHP_EOL . PHP_EOL . "  {$clave}" . PHP_EOL . PHP_EOL;
+        break;
+
+    case 'operador:listar':
+        Db::asegurarEsquema();
+        foreach (Db::consultar('SELECT * FROM operadores ORDER BY id') as $op) {
+            printf("%-3d %-34s %s%s%s\n", $op['id'], $op['email'], $op['ultimo_acceso'] ? 'ultimo acceso ' . $op['ultimo_acceso'] : 'nunca ingreso', $op['activo'] ? '' : '  [DESACTIVADO]',
+                ($op['bloqueado_hasta'] && strtotime($op['bloqueado_hasta']) > time()) ? '  [BLOQUEADO hasta ' . $op['bloqueado_hasta'] . ']' : '');
+        }
+        break;
+
+    case 'operador:reset':
+        exigir($o, array('email'));
+        Db::asegurarEsquema();
+        try {
+            $clave = Operadores::restablecer($o['email']);
+        } catch (InvalidArgumentException $x) {
+            salir($x->getMessage());
+        }
+        echo "Contrasena restablecida para " . strtolower($o['email']) . " (cuenta desbloqueada y activa)." . PHP_EOL . PHP_EOL
+            . "  Contrasena TEMPORAL (una sola vez):" . PHP_EOL . PHP_EOL . "  {$clave}" . PHP_EOL . PHP_EOL;
+        break;
+
     case 'serie:crear':
         exigir($o, array('ruc', 'entorno', 'tipo', 'serie'));
         if (!in_array($o['entorno'], array('test', 'live'), true)) {
@@ -480,6 +515,6 @@ switch ($cmd) {
         break;
 
     default:
-        echo "Comandos: init | empresa:crear | empresa:actualizar | empresa:listar | key:crear | key:listar | key:revocar | cert:subir | cert:ver | serie:crear | serie:listar | db:copiar | plan:sembrar | plan:crear | plan:listar | empresa:plan | uso:ver | usuario:crear | usuario:listar | usuario:reset | usuario:activar | usuario:desactivar" . PHP_EOL
+        echo "Comandos: init | empresa:crear | empresa:actualizar | empresa:listar | key:crear | key:listar | key:revocar | cert:subir | cert:ver | serie:crear | serie:listar | db:copiar | plan:sembrar | plan:crear | plan:listar | empresa:plan | uso:ver | operador:crear | operador:listar | operador:reset | usuario:crear | usuario:listar | usuario:reset | usuario:activar | usuario:desactivar" . PHP_EOL
             . "Vea el encabezado de bin/admin.php para las opciones." . PHP_EOL;
 }

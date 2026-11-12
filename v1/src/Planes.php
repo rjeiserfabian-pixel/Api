@@ -27,7 +27,7 @@ class Planes
 
     /** Valores recomendados (medidos: una emision tarda ~0.6-1 s y SUNAT tolera pocas simultaneas). php bin/admin.php plan:sembrar */
     public static $recomendados = array(
-        array('nombre' => 'Prueba', 'cuota_mensual' => 0, 'limite_sunat_min' => 10, 'limite_general_min' => 30, 'max_webhooks' => 1),
+        array('nombre' => 'Prueba', 'cuota_mensual' => 0, 'limite_sunat_min' => 10, 'limite_general_min' => 30, 'max_webhooks' => 1, 'autoservicio' => 1),
         array('nombre' => 'Basico', 'cuota_mensual' => 500, 'limite_sunat_min' => 20, 'limite_general_min' => 120, 'max_webhooks' => 2),
         array('nombre' => 'Pro', 'cuota_mensual' => 5000, 'limite_sunat_min' => 60, 'limite_general_min' => 300, 'max_webhooks' => 5),
         array('nombre' => 'Empresa', 'cuota_mensual' => 50000, 'limite_sunat_min' => 120, 'limite_general_min' => 600, 'max_webhooks' => 5),
