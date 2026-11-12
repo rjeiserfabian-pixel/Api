@@ -5,7 +5,7 @@ header("HTTP/1.1");
 date_default_timezone_set("America/Lima");
 
 require 'libraries/Numletras.php';
-require 'libraries/env.php';
+require_once __DIR__ . '/libraries/env.php';
 require 'libraries/Variables_diversas_model.php';
 require 'libraries/efactura.php';
 

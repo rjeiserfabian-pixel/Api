@@ -1,0 +1,4003 @@
+{
+    "openapi": "3.0.3",
+    "info": {
+        "title": "API SUNAT - Facturación electrónica",
+        "version": "1.0.0",
+        "description": "API REST para emitir **comprobantes electrónicos a SUNAT** (facturas, boletas, notas, retenciones, guías, resúmenes y bajas) sin manejar XML, firmas ni servicios web de SUNAT: usted envía un JSON y recibe el resultado.\n\n## Primeros pasos\n1. Obtenga su **API key** (se la entrega el administrador). Hay dos tipos:\n   - `sk_test_…` → **pruebas**: envía al **beta** de SUNAT. No tiene efectos tributarios.\n   - `sk_live_…` → **producción**: documentos reales ante SUNAT.\n2. Envíela en cada petición: `Authorization: Bearer sk_test_…`\n3. Compruebe con `GET /me`.\n4. Emita su primera factura con `POST /comprobantes`.\n\n## Autenticación y entornos\nEl **entorno lo decide la llave**, no el JSON. Las credenciales SOL y el certificado digital de su empresa están registrados en la API: **no se envían en las peticiones**. Para producción la empresa debe registrar su certificado (`POST /certificado` con llave `live`).\n\n## Cómo leer las respuestas\nToda respuesta es `{ \"ok\": true, \"data\": … }` o `{ \"ok\": false, \"error\": { \"code\", \"message\", \"details\" } }`, y siempre incluye `request_id` (también en la cabecera `X-Request-Id`).\n\n- **HTTP 201**: la API procesó el documento. Mire `data.estado`: `aceptado`, `rechazado`, `pendiente` o `simulado`. **Que SUNAT rechace un documento no es un error HTTP**: `data.sunat.descripcion` explica el motivo.\n- **HTTP 4xx**: la petición no se procesó (datos inválidos, sin autenticar, duplicado…). No se envió nada a SUNAT.\n- **HTTP 5xx (500, 502, 504)**: fallo temporal del servicio o de SUNAT. Reintente con la misma `Idempotency-Key`.\n\n## Reintentos seguros: `Idempotency-Key`\nEnvíe en cada emisión una cabecera `Idempotency-Key` única por operación (por ejemplo, el id de su venta). Si no recibe respuesta (corte de red), repita **la misma petición con la misma clave**: recibirá el resultado guardado (`200` + `Idempotent-Replay: true`) sin riesgo de duplicar el documento ante SUNAT. Además, un tipo-serie-número ya aceptado o pendiente responde `409 documento_duplicado`.\n\n## Numeración y sincronización con su sistema comercial\nCada serie (por empresa y por entorno) tiene un **dueño**:\n\n- **`cliente`** (por defecto): su sistema comercial numera y envía `venta.numero` como siempre. La API **aprende** el último número usado (`GET /series`): no importa si salta o llega desordenado.\n- **`api`**: la API numera. Puede **omitir `numero`** (se asigna solo, de forma atómica, sin repetir) o **reservar números** con `POST /series/reservar`, imprimirlos en el comprobante y **enviarlos a SUNAT después** con ese mismo número.\n\nGarantías:\n- **Sin duplicados ni saltos por reintento:** la numeración automática exige `Idempotency-Key`; si el envío falla (SUNAT caído, corte de red) y usted reintenta con la misma clave, se **reutiliza el mismo número**.\n- Si SUNAT **rechaza** un documento numerado automáticamente, su número se libera y el documento corregido lo reutiliza.\n- Los números se comparan como enteros: `150` y `00000150` son el mismo documento.\n- Resúmenes, bajas y reversiones usan un **correlativo por día** que se asigna solo si lo omite.\n- Cada entorno tiene sus propias series: **registre también las de producción** (con `ultimo_numero` = el último que ya usó) antes de emitir con una llave `live`.\n\n**Consultar por serie y número** (por ejemplo, un cliente que recibió la boleta antes de que se enviara a SUNAT): `GET /comprobantes/{tipo}/{serie}/{numero}` responde `reservado`, `aceptado`, etc., o `404` si aún no existe.\n\n## Flujos frecuentes\n- **Anular una factura** (menos de 7 días): `POST /bajas` → ticket → `POST /tickets`. O emita una **nota de crédito** (motivo `01`).\n- **Anular una boleta**: no existe baja para boletas; envíela en un **resumen diario** con `status` = 3 (`POST /resumenes`).\n- **Boletas del día**: `POST /resumenes` (SUNAT lo exige para boletas).\n\n## Códigos de error\n| `code` | HTTP | Significado |\n|---|---|---|\n| `no_autenticado` | 401 | Falta la API key o es inválida/revocada |\n| `empresa_inactiva` | 403 | Empresa desactivada |\n| `ruta_no_encontrada`, `no_encontrado`, `certificado_no_registrado` | 404 | No existe |\n| `metodo_no_permitido` | 405 | Método HTTP incorrecto (cabecera `Allow`) |\n| `cuerpo_vacio`, `json_invalido`, `idempotency_key_invalida` | 400 | Petición mal formada |\n| `documento_duplicado`, `idempotencia_conflicto` | 409 | Ya existe / clave ya usada con otro cuerpo |\n| `cuerpo_muy_grande` | 413 | Más de 3 MB |\n| `validacion` | 422 | Datos inválidos: `details` lista cada campo y cómo corregirlo |\n| `certificado_requerido`, `certificado_vencido`, `certificado_invalido`, `llave_invalida`, `llave_no_corresponde`, `certificado_ruc_no_coincide`, `certificado_no_vigente` | 422 | Problema con el certificado digital |\n| `motor_no_disponible`, `motor_error` | 502 | El motor o SUNAT no respondieron: reintente |\n| `tiempo_agotado` | 504 | SUNAT no respondió a tiempo: reintente en unos minutos |\n| `error_interno` | 500 | Error inesperado: cite el `request_id` |\n\n## Limitaciones conocidas\n- Un número **reservado** que nunca se envía queda como hueco en la serie (todavía no hay una operación para liberarlo).\n- Sin límite de peticiones configurado todavía.\n- La consulta de tickets depende del servicio de SUNAT, que puede demorar o no responder (`504 tiempo_agotado`)."
+    },
+    "servers": [
+        {
+            "url": "https://tu-dominio.com/API_SUNAT/v1",
+            "description": "Producción (reemplace por su dominio)"
+        },
+        {
+            "url": "http://localhost/API_SUNAT/v1",
+            "description": "Local"
+        }
+    ],
+    "tags": [
+        {
+            "name": "Sistema"
+        },
+        {
+            "name": "Comprobantes"
+        },
+        {
+            "name": "Resúmenes y bajas"
+        },
+        {
+            "name": "Retenciones"
+        },
+        {
+            "name": "Guías de remisión"
+        },
+        {
+            "name": "Consultas"
+        },
+        {
+            "name": "Series y numeración"
+        },
+        {
+            "name": "Historial"
+        },
+        {
+            "name": "Certificado"
+        }
+    ],
+    "paths": {
+        "/health": {
+            "get": {
+                "tags": [
+                    "Sistema"
+                ],
+                "operationId": "health",
+                "summary": "Estado del servicio",
+                "description": "No requiere autenticación. Úselo para monitoreo.",
+                "security": [],
+                "responses": {
+                    "200": {
+                        "description": "Servicio activo.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "type": "object",
+                                            "properties": {
+                                                "servicio": {
+                                                    "type": "string"
+                                                },
+                                                "version": {
+                                                    "type": "string"
+                                                },
+                                                "hora": {
+                                                    "type": "string",
+                                                    "format": "date-time"
+                                                }
+                                            }
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/me": {
+            "get": {
+                "tags": [
+                    "Sistema"
+                ],
+                "operationId": "me",
+                "summary": "Empresa, entorno y certificado de la API key",
+                "description": "Útil para comprobar que la llave funciona y a qué entorno apunta (`test` → SUNAT beta, `live` → producción).",
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Datos de la empresa.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/Me"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/R401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/R403"
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/R405"
+                    }
+                }
+            }
+        },
+        "/certificado": {
+            "get": {
+                "tags": [
+                    "Certificado"
+                ],
+                "operationId": "certificadoEstado",
+                "summary": "Estado del certificado digital",
+                "description": "Devuelve vigencia, huella y días restantes del certificado de **este entorno**. Nunca devuelve la llave privada.",
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Certificado registrado.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/Certificado"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/R401"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/R404"
+                    }
+                }
+            },
+            "post": {
+                "tags": [
+                    "Certificado"
+                ],
+                "operationId": "certificadoSubir",
+                "summary": "Registrar o reemplazar el certificado digital",
+                "description": "Cada empresa firma con su propio certificado. Con llave `test` se registra el de pruebas (opcional: si no hay, se usa uno compartido). Con llave `live` se registra el de **producción, obligatorio** para emitir.\n\nSe valida que sea RSA, que la llave corresponda al certificado, que esté vigente y —en producción— que contenga el RUC de la empresa. La llave privada se guarda **cifrada**.",
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/CertificadoRequest"
+                            },
+                            "examples": {
+                                "pfx": {
+                                    "summary": "Archivo PFX",
+                                    "value": {
+                                        "pfx_base64": "MIIJ...(archivo .pfx en base64)",
+                                        "password": "contrasena-del-pfx"
+                                    }
+                                },
+                                "pem": {
+                                    "summary": "PEM",
+                                    "value": {
+                                        "cert_pem": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----",
+                                        "key_pem": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Certificado guardado.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/Certificado"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/R400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/R401"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/R413"
+                    },
+                    "422": {
+                        "$ref": "#/components/responses/R422"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/R500"
+                    }
+                }
+            }
+        },
+        "/comprobantes": {
+            "post": {
+                "tags": [
+                    "Comprobantes"
+                ],
+                "operationId": "emitirComprobante",
+                "summary": "Emitir factura, boleta, nota de crédito o nota de débito",
+                "description": "Valida los datos, firma el XML con el certificado de su empresa, lo envía a SUNAT y devuelve el resultado.\n\n**Cómo leer la respuesta:** el HTTP es `201` cuando se procesó, y `estado` dice qué pasó (`aceptado` / `rechazado`). Un rechazo de SUNAT **no es un error HTTP**.\n\nUse `Idempotency-Key` para poder reintentar con seguridad. Si el mismo tipo-serie-número ya fue aceptado, responde `409 documento_duplicado`.",
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/ComprobanteRequest"
+                            },
+                            "examples": {
+                                "factura": {
+                                    "summary": "Factura al contado",
+                                    "value": {
+                                        "cliente": {
+                                            "codigo_tipo_entidad": "6",
+                                            "numero_documento": "20987654321",
+                                            "razon_social_nombres": "CLIENTE S.A.C.",
+                                            "cliente_direccion": "AV. CLIENTE 456"
+                                        },
+                                        "venta": {
+                                            "tipo_documento_codigo": "01",
+                                            "serie": "F001",
+                                            "numero": "00000001",
+                                            "fecha_emision": "2026-11-11",
+                                            "hora_emision": "10:00:00",
+                                            "fecha_vencimiento": "2026-12-11",
+                                            "moneda_id": 1,
+                                            "forma_pago_id": 1,
+                                            "total_gravada": 100,
+                                            "total_igv": 18,
+                                            "orden_compra": "OC-001",
+                                            "nota": "Observaciones opcionales"
+                                        },
+                                        "items": [
+                                            {
+                                                "codigo_producto": "PROD001",
+                                                "producto": "PRODUCTO DE EJEMPLO",
+                                                "codigo_sunat": "50202201",
+                                                "cantidad": 2,
+                                                "codigo_unidad": "NIU",
+                                                "precio_base": 50,
+                                                "tipo_igv_codigo": "10"
+                                            }
+                                        ]
+                                    }
+                                },
+                                "factura_credito": {
+                                    "summary": "Factura al crédito con cuotas",
+                                    "value": {
+                                        "cliente": {
+                                            "codigo_tipo_entidad": "6",
+                                            "numero_documento": "20987654321",
+                                            "razon_social_nombres": "CLIENTE S.A.C.",
+                                            "cliente_direccion": "AV. CLIENTE 456"
+                                        },
+                                        "venta": {
+                                            "tipo_documento_codigo": "01",
+                                            "serie": "F001",
+                                            "numero": "00000002",
+                                            "fecha_emision": "2026-11-11",
+                                            "hora_emision": "10:00:00",
+                                            "fecha_vencimiento": "2026-12-11",
+                                            "moneda_id": 1,
+                                            "forma_pago_id": 2,
+                                            "total_gravada": 100,
+                                            "total_igv": 18
+                                        },
+                                        "cuotas": [
+                                            {
+                                                "monto": 118,
+                                                "fecha_cuota": "2026-12-11"
+                                            }
+                                        ],
+                                        "items": [
+                                            {
+                                                "codigo_producto": "PROD001",
+                                                "producto": "PRODUCTO DE EJEMPLO",
+                                                "codigo_sunat": "50202201",
+                                                "cantidad": 2,
+                                                "codigo_unidad": "NIU",
+                                                "precio_base": 50,
+                                                "tipo_igv_codigo": "10"
+                                            }
+                                        ]
+                                    }
+                                },
+                                "boleta": {
+                                    "summary": "Boleta a DNI",
+                                    "value": {
+                                        "cliente": {
+                                            "codigo_tipo_entidad": "1",
+                                            "numero_documento": "12345678",
+                                            "razon_social_nombres": "JUAN PEREZ GARCIA",
+                                            "cliente_direccion": "AV. CLIENTE 456"
+                                        },
+                                        "venta": {
+                                            "tipo_documento_codigo": "03",
+                                            "serie": "B001",
+                                            "numero": "00000001",
+                                            "fecha_emision": "2026-11-11",
+                                            "hora_emision": "10:00:00",
+                                            "moneda_id": 1,
+                                            "forma_pago_id": 1,
+                                            "total_gravada": 84.75,
+                                            "total_igv": 15.25
+                                        },
+                                        "items": [
+                                            {
+                                                "codigo_producto": "PROD001",
+                                                "producto": "PRODUCTO DE EJEMPLO",
+                                                "codigo_sunat": "50202201",
+                                                "cantidad": 1,
+                                                "codigo_unidad": "NIU",
+                                                "precio_base": 84.75,
+                                                "tipo_igv_codigo": "10"
+                                            }
+                                        ]
+                                    }
+                                },
+                                "nota_credito": {
+                                    "summary": "Nota de crédito (anulación)",
+                                    "value": {
+                                        "cliente": {
+                                            "codigo_tipo_entidad": "6",
+                                            "numero_documento": "20987654321",
+                                            "razon_social_nombres": "CLIENTE S.A.C.",
+                                            "cliente_direccion": "AV. CLIENTE 456"
+                                        },
+                                        "venta": {
+                                            "tipo_documento_codigo": "07",
+                                            "serie": "FC01",
+                                            "numero": "00000001",
+                                            "fecha_emision": "2026-11-11",
+                                            "hora_emision": "10:00:00",
+                                            "moneda_id": 1,
+                                            "forma_pago_id": 1,
+                                            "total_gravada": 50,
+                                            "total_igv": 9,
+                                            "relacionado_serie": "F001",
+                                            "relacionado_numero": "00000001",
+                                            "relacionado_tipo_documento": "01",
+                                            "relacionado_motivo_codigo": "01"
+                                        },
+                                        "items": [
+                                            {
+                                                "codigo_producto": "PROD001",
+                                                "producto": "DEVOLUCION PARCIAL",
+                                                "codigo_sunat": "50202201",
+                                                "cantidad": 1,
+                                                "codigo_unidad": "NIU",
+                                                "precio_base": 50,
+                                                "tipo_igv_codigo": "10"
+                                            }
+                                        ]
+                                    }
+                                },
+                                "nota_debito": {
+                                    "summary": "Nota de débito",
+                                    "value": {
+                                        "cliente": {
+                                            "codigo_tipo_entidad": "6",
+                                            "numero_documento": "20987654321",
+                                            "razon_social_nombres": "CLIENTE S.A.C.",
+                                            "cliente_direccion": "AV. CLIENTE 456"
+                                        },
+                                        "venta": {
+                                            "tipo_documento_codigo": "08",
+                                            "serie": "FD01",
+                                            "numero": "00000001",
+                                            "fecha_emision": "2026-11-11",
+                                            "hora_emision": "10:00:00",
+                                            "moneda_id": 1,
+                                            "forma_pago_id": 1,
+                                            "total_gravada": 20,
+                                            "total_igv": 3.6,
+                                            "relacionado_serie": "F001",
+                                            "relacionado_numero": "00000001",
+                                            "relacionado_tipo_documento": "01",
+                                            "relacionado_motivo_codigo": "01"
+                                        },
+                                        "items": [
+                                            {
+                                                "codigo_producto": "SERV001",
+                                                "producto": "PENALIDAD POR INCUMPLIMIENTO",
+                                                "codigo_sunat": "84111506",
+                                                "cantidad": 1,
+                                                "codigo_unidad": "NIU",
+                                                "precio_base": 20,
+                                                "tipo_igv_codigo": "10"
+                                            }
+                                        ]
+                                    }
+                                },
+                                "boleta_auto": {
+                                    "summary": "Boleta con número automático (serie en modo api; exige Idempotency-Key)",
+                                    "value": {
+                                        "cliente": {
+                                            "codigo_tipo_entidad": "1",
+                                            "numero_documento": "12345678",
+                                            "razon_social_nombres": "JUAN PEREZ GARCIA",
+                                            "cliente_direccion": "AV. CLIENTE 456"
+                                        },
+                                        "venta": {
+                                            "tipo_documento_codigo": "03",
+                                            "serie": "B001",
+                                            "fecha_emision": "2026-11-11",
+                                            "hora_emision": "10:00:00",
+                                            "moneda_id": 1,
+                                            "forma_pago_id": 1,
+                                            "total_gravada": 84.75,
+                                            "total_igv": 15.25
+                                        },
+                                        "items": [
+                                            {
+                                                "codigo_producto": "PROD001",
+                                                "producto": "PRODUCTO DE EJEMPLO",
+                                                "codigo_sunat": "50202201",
+                                                "cantidad": 1,
+                                                "codigo_unidad": "NIU",
+                                                "precio_base": 84.75,
+                                                "tipo_igv_codigo": "10"
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Procesado. El campo `estado` indica el resultado en SUNAT.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/Documento"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                },
+                                "examples": {
+                                    "aceptado": {
+                                        "summary": "Aceptado por SUNAT",
+                                        "value": {
+                                            "ok": true,
+                                            "data": {
+                                                "id": "doc_0e7ded8531fd33aede36",
+                                                "tipo": "01",
+                                                "serie": "F001",
+                                                "numero": "94455099",
+                                                "entorno": "prueba",
+                                                "estado": "aceptado",
+                                                "sunat": {
+                                                    "codigo": "0",
+                                                    "descripcion": "La Factura numero F001-94455099, ha sido aceptada"
+                                                },
+                                                "ticket": null,
+                                                "hash": "DpL3Tb7gsOql6mMKZA61o3mQ7+Q=",
+                                                "archivos": {
+                                                    "xml": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/FIRMA/20000000001-01-F001-94455099.xml",
+                                                    "cdr": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/CDR/R-20000000001-01-F001-94455099.xml",
+                                                    "pdf": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/PDF/20000000001-01-F001-94455099.pdf"
+                                                },
+                                                "creado": "2026-11-11 22:45:01"
+                                            },
+                                            "request_id": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "rechazado": {
+                                        "summary": "Rechazado por SUNAT",
+                                        "value": {
+                                            "ok": true,
+                                            "data": {
+                                                "id": "doc_0e7ded8531fd33aede36",
+                                                "tipo": "01",
+                                                "serie": "F001",
+                                                "numero": "94455099",
+                                                "entorno": "prueba",
+                                                "estado": "rechazado",
+                                                "sunat": {
+                                                    "codigo": "soap-env:Client.3267",
+                                                    "descripcion": "Fecha del pago unico o de las cuotas no puede ser anterior o igual a la fecha de emision del comprobante"
+                                                },
+                                                "ticket": null,
+                                                "hash": null,
+                                                "archivos": {},
+                                                "creado": "2026-11-11 22:45:01"
+                                            },
+                                            "request_id": "req_92993a546c654698"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "200": {
+                        "description": "Peticion repetida con la misma `Idempotency-Key`: devuelve el resultado guardado.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/Documento"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                },
+                                "example": {
+                                    "ok": true,
+                                    "data": {
+                                        "id": "doc_0e7ded8531fd33aede36",
+                                        "tipo": "01",
+                                        "serie": "F001",
+                                        "numero": "94455099",
+                                        "entorno": "prueba",
+                                        "estado": "aceptado",
+                                        "sunat": {
+                                            "codigo": "0",
+                                            "descripcion": "La Factura numero F001-94455099, ha sido aceptada"
+                                        },
+                                        "ticket": null,
+                                        "hash": "DpL3Tb7gsOql6mMKZA61o3mQ7+Q=",
+                                        "archivos": {
+                                            "xml": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/FIRMA/20000000001-01-F001-94455099.xml",
+                                            "cdr": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/CDR/R-20000000001-01-F001-94455099.xml",
+                                            "pdf": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/PDF/20000000001-01-F001-94455099.pdf"
+                                        },
+                                        "creado": "2026-11-11 22:45:01"
+                                    },
+                                    "request_id": "req_2b34bdbb48099d3b"
+                                }
+                            }
+                        },
+                        "headers": {
+                            "Idempotent-Replay": {
+                                "description": "true cuando se devuelve el resultado guardado de una peticion repetida.",
+                                "schema": {
+                                    "type": "string",
+                                    "enum": [
+                                        "true"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/R400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/R401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/R403"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/R409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/R413"
+                    },
+                    "422": {
+                        "$ref": "#/components/responses/R422"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/R500"
+                    },
+                    "502": {
+                        "$ref": "#/components/responses/R502"
+                    },
+                    "504": {
+                        "$ref": "#/components/responses/R504"
+                    }
+                },
+                "parameters": [
+                    {
+                        "$ref": "#/components/parameters/IdempotencyKey"
+                    },
+                    {
+                        "$ref": "#/components/parameters/Incluir"
+                    }
+                ]
+            }
+        },
+        "/resumenes": {
+            "post": {
+                "tags": [
+                    "Resúmenes y bajas"
+                ],
+                "operationId": "enviarResumen",
+                "summary": "Resumen diario de boletas",
+                "description": "Informa a SUNAT las boletas del día (y es la vía para **anular boletas**, con `status` = 3). SUNAT devuelve un ticket: `estado` queda `pendiente`; consulte el resultado con `POST /tickets` (`tipo` = `resumen`).",
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/ResumenRequest"
+                            },
+                            "examples": {
+                                "resumen": {
+                                    "summary": "Resumen con una boleta",
+                                    "value": {
+                                        "resumen": {
+                                            "numero": "20261111",
+                                            "correlativo": "1",
+                                            "fecha_documentos": "2026-11-11",
+                                            "fecha_resumen": "2026-11-11"
+                                        },
+                                        "comprobantes": [
+                                            {
+                                                "tipo_documento": "03",
+                                                "serie": "B001",
+                                                "numero": "00000001",
+                                                "cliente_numero_documento": "12345678",
+                                                "cliente_tipo_documento": "1",
+                                                "total_a_pagar": 100,
+                                                "total_gravada": 84.75,
+                                                "total_igv": 15.25,
+                                                "total_exonerada": "",
+                                                "total_inafecta": "",
+                                                "total_gratuita": "",
+                                                "status": "1"
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Procesado. El campo `estado` indica el resultado en SUNAT.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/Documento"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                },
+                                "example": {
+                                    "ok": true,
+                                    "data": {
+                                        "id": "doc_d62d20ffb272192ca6b0",
+                                        "tipo": "RC",
+                                        "serie": "20261111",
+                                        "numero": "73064",
+                                        "entorno": "prueba",
+                                        "estado": "pendiente",
+                                        "sunat": {
+                                            "codigo": null,
+                                            "descripcion": "Recibido por SUNAT. Consulte el ticket para conocer el resultado."
+                                        },
+                                        "ticket": "1794455238208",
+                                        "hash": null,
+                                        "archivos": {},
+                                        "creado": "2026-11-11 22:45:21"
+                                    },
+                                    "request_id": "req_5c9fdc752c96fc22"
+                                }
+                            }
+                        }
+                    },
+                    "200": {
+                        "description": "Peticion repetida con la misma `Idempotency-Key`: devuelve el resultado guardado.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/Documento"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                },
+                                "example": {
+                                    "ok": true,
+                                    "data": {
+                                        "id": "doc_d62d20ffb272192ca6b0",
+                                        "tipo": "RC",
+                                        "serie": "20261111",
+                                        "numero": "73064",
+                                        "entorno": "prueba",
+                                        "estado": "pendiente",
+                                        "sunat": {
+                                            "codigo": null,
+                                            "descripcion": "Recibido por SUNAT. Consulte el ticket para conocer el resultado."
+                                        },
+                                        "ticket": "1794455238208",
+                                        "hash": null,
+                                        "archivos": {},
+                                        "creado": "2026-11-11 22:45:21"
+                                    },
+                                    "request_id": "req_2b34bdbb48099d3b"
+                                }
+                            }
+                        },
+                        "headers": {
+                            "Idempotent-Replay": {
+                                "description": "true cuando se devuelve el resultado guardado de una peticion repetida.",
+                                "schema": {
+                                    "type": "string",
+                                    "enum": [
+                                        "true"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/R400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/R401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/R403"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/R409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/R413"
+                    },
+                    "422": {
+                        "$ref": "#/components/responses/R422"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/R500"
+                    },
+                    "502": {
+                        "$ref": "#/components/responses/R502"
+                    },
+                    "504": {
+                        "$ref": "#/components/responses/R504"
+                    }
+                },
+                "parameters": [
+                    {
+                        "$ref": "#/components/parameters/IdempotencyKey"
+                    }
+                ]
+            }
+        },
+        "/bajas": {
+            "post": {
+                "tags": [
+                    "Resúmenes y bajas"
+                ],
+                "operationId": "enviarBaja",
+                "summary": "Comunicación de baja",
+                "description": "Anula **facturas y notas** (no boletas) con menos de 7 días. SUNAT devuelve un ticket (`estado` = `pendiente`). Use un `correlativo_diario` distinto en cada envío.",
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/BajaRequest"
+                            },
+                            "examples": {
+                                "baja": {
+                                    "summary": "Baja de una factura",
+                                    "value": {
+                                        "anulacion": {
+                                            "correlativo_diario": "1",
+                                            "fecha_comprobante": "2026-11-11",
+                                            "tipo_documento_codigo": "01",
+                                            "serie": "F001",
+                                            "numero": "00000002"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Procesado. El campo `estado` indica el resultado en SUNAT.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/Documento"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                },
+                                "example": {
+                                    "ok": true,
+                                    "data": {
+                                        "id": "doc_d62d20ffb272192ca6b0",
+                                        "tipo": "RC",
+                                        "serie": "20261111",
+                                        "numero": "73064",
+                                        "entorno": "prueba",
+                                        "estado": "pendiente",
+                                        "sunat": {
+                                            "codigo": null,
+                                            "descripcion": "Recibido por SUNAT. Consulte el ticket para conocer el resultado."
+                                        },
+                                        "ticket": "1794455238208",
+                                        "hash": null,
+                                        "archivos": {},
+                                        "creado": "2026-11-11 22:45:21"
+                                    },
+                                    "request_id": "req_5c9fdc752c96fc22"
+                                }
+                            }
+                        }
+                    },
+                    "200": {
+                        "description": "Peticion repetida con la misma `Idempotency-Key`: devuelve el resultado guardado.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/Documento"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                },
+                                "example": {
+                                    "ok": true,
+                                    "data": {
+                                        "id": "doc_d62d20ffb272192ca6b0",
+                                        "tipo": "RC",
+                                        "serie": "20261111",
+                                        "numero": "73064",
+                                        "entorno": "prueba",
+                                        "estado": "pendiente",
+                                        "sunat": {
+                                            "codigo": null,
+                                            "descripcion": "Recibido por SUNAT. Consulte el ticket para conocer el resultado."
+                                        },
+                                        "ticket": "1794455238208",
+                                        "hash": null,
+                                        "archivos": {},
+                                        "creado": "2026-11-11 22:45:21"
+                                    },
+                                    "request_id": "req_2b34bdbb48099d3b"
+                                }
+                            }
+                        },
+                        "headers": {
+                            "Idempotent-Replay": {
+                                "description": "true cuando se devuelve el resultado guardado de una peticion repetida.",
+                                "schema": {
+                                    "type": "string",
+                                    "enum": [
+                                        "true"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/R400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/R401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/R403"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/R409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/R413"
+                    },
+                    "422": {
+                        "$ref": "#/components/responses/R422"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/R500"
+                    },
+                    "502": {
+                        "$ref": "#/components/responses/R502"
+                    },
+                    "504": {
+                        "$ref": "#/components/responses/R504"
+                    }
+                },
+                "parameters": [
+                    {
+                        "$ref": "#/components/parameters/IdempotencyKey"
+                    }
+                ]
+            }
+        },
+        "/reversiones": {
+            "post": {
+                "tags": [
+                    "Resúmenes y bajas"
+                ],
+                "operationId": "enviarReversion",
+                "summary": "Reversión",
+                "description": "Revierte comprobantes de retención o percepción. Devuelve un ticket (`estado` = `pendiente`).",
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/ReversionRequest"
+                            },
+                            "examples": {
+                                "reversion": {
+                                    "summary": "Reversión de una retención",
+                                    "value": {
+                                        "reversion": {
+                                            "correlativo_diario": "1",
+                                            "fecha_resumen": "2026-11-11",
+                                            "fecha_documentos": "2026-11-11"
+                                        },
+                                        "documento_relacionados": [
+                                            {
+                                                "tipo_documento_codigo": "20",
+                                                "serie": "R001",
+                                                "numero": "00000001",
+                                                "descripcion": "ANULACION POR ERROR"
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Procesado. El campo `estado` indica el resultado en SUNAT.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/Documento"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                },
+                                "example": {
+                                    "ok": true,
+                                    "data": {
+                                        "id": "doc_d62d20ffb272192ca6b0",
+                                        "tipo": "RC",
+                                        "serie": "20261111",
+                                        "numero": "73064",
+                                        "entorno": "prueba",
+                                        "estado": "pendiente",
+                                        "sunat": {
+                                            "codigo": null,
+                                            "descripcion": "Recibido por SUNAT. Consulte el ticket para conocer el resultado."
+                                        },
+                                        "ticket": "1794455238208",
+                                        "hash": null,
+                                        "archivos": {},
+                                        "creado": "2026-11-11 22:45:21"
+                                    },
+                                    "request_id": "req_5c9fdc752c96fc22"
+                                }
+                            }
+                        }
+                    },
+                    "200": {
+                        "description": "Peticion repetida con la misma `Idempotency-Key`: devuelve el resultado guardado.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/Documento"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                },
+                                "example": {
+                                    "ok": true,
+                                    "data": {
+                                        "id": "doc_d62d20ffb272192ca6b0",
+                                        "tipo": "RC",
+                                        "serie": "20261111",
+                                        "numero": "73064",
+                                        "entorno": "prueba",
+                                        "estado": "pendiente",
+                                        "sunat": {
+                                            "codigo": null,
+                                            "descripcion": "Recibido por SUNAT. Consulte el ticket para conocer el resultado."
+                                        },
+                                        "ticket": "1794455238208",
+                                        "hash": null,
+                                        "archivos": {},
+                                        "creado": "2026-11-11 22:45:21"
+                                    },
+                                    "request_id": "req_2b34bdbb48099d3b"
+                                }
+                            }
+                        },
+                        "headers": {
+                            "Idempotent-Replay": {
+                                "description": "true cuando se devuelve el resultado guardado de una peticion repetida.",
+                                "schema": {
+                                    "type": "string",
+                                    "enum": [
+                                        "true"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/R400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/R401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/R403"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/R409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/R413"
+                    },
+                    "422": {
+                        "$ref": "#/components/responses/R422"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/R500"
+                    },
+                    "502": {
+                        "$ref": "#/components/responses/R502"
+                    },
+                    "504": {
+                        "$ref": "#/components/responses/R504"
+                    }
+                },
+                "parameters": [
+                    {
+                        "$ref": "#/components/parameters/IdempotencyKey"
+                    }
+                ]
+            }
+        },
+        "/retenciones": {
+            "post": {
+                "tags": [
+                    "Retenciones"
+                ],
+                "operationId": "emitirRetencion",
+                "summary": "Comprobante de retención (20)",
+                "description": "Emite un comprobante de retención. Su empresa es la agente de retención.",
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/RetencionRequest"
+                            },
+                            "examples": {
+                                "retencion": {
+                                    "summary": "Retención del 3 %",
+                                    "value": {
+                                        "proveedor": {
+                                            "ruc": "20987654321",
+                                            "razon_social": "PROVEEDOR S.A.C."
+                                        },
+                                        "retencion": {
+                                            "serie": "R001",
+                                            "numero": "00000001",
+                                            "fecha_de_emision": "2026-11-11",
+                                            "codigo": "01",
+                                            "porcentaje": 3,
+                                            "nota": "Retencion segun regimen",
+                                            "total_retenido": 35.4,
+                                            "total_facturado_menos_retenido": 1144.6
+                                        },
+                                        "documento_relacionados": [
+                                            {
+                                                "relacionado_tipo_documento": "01",
+                                                "relacionado_serie": "F001",
+                                                "relacionado_numero": "00000001",
+                                                "relacionado_fecha_emision": "2026-11-11",
+                                                "relacionado_monto_total": 1180,
+                                                "pago_numero": "1",
+                                                "pago_monto": 1180,
+                                                "pago_fecha": "2026-11-11",
+                                                "retencion_monto": 35.4,
+                                                "retencion_fecha": "2026-11-11",
+                                                "moneda": "1",
+                                                "moneda_tipo_cambio": 1,
+                                                "moneda_fecha_cambio": "2026-11-11"
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Procesado. El campo `estado` indica el resultado en SUNAT.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/Documento"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                },
+                                "example": {
+                                    "ok": true,
+                                    "data": {
+                                        "id": "doc_0e7ded8531fd33aede36",
+                                        "tipo": "01",
+                                        "serie": "F001",
+                                        "numero": "94455099",
+                                        "entorno": "prueba",
+                                        "estado": "aceptado",
+                                        "sunat": {
+                                            "codigo": "0",
+                                            "descripcion": "La Factura numero F001-94455099, ha sido aceptada"
+                                        },
+                                        "ticket": null,
+                                        "hash": "DpL3Tb7gsOql6mMKZA61o3mQ7+Q=",
+                                        "archivos": {
+                                            "xml": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/FIRMA/20000000001-01-F001-94455099.xml",
+                                            "cdr": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/CDR/R-20000000001-01-F001-94455099.xml",
+                                            "pdf": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/PDF/20000000001-01-F001-94455099.pdf"
+                                        },
+                                        "creado": "2026-11-11 22:45:01"
+                                    },
+                                    "request_id": "req_5c9fdc752c96fc22"
+                                }
+                            }
+                        }
+                    },
+                    "200": {
+                        "description": "Peticion repetida con la misma `Idempotency-Key`: devuelve el resultado guardado.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/Documento"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                },
+                                "example": {
+                                    "ok": true,
+                                    "data": {
+                                        "id": "doc_0e7ded8531fd33aede36",
+                                        "tipo": "01",
+                                        "serie": "F001",
+                                        "numero": "94455099",
+                                        "entorno": "prueba",
+                                        "estado": "aceptado",
+                                        "sunat": {
+                                            "codigo": "0",
+                                            "descripcion": "La Factura numero F001-94455099, ha sido aceptada"
+                                        },
+                                        "ticket": null,
+                                        "hash": "DpL3Tb7gsOql6mMKZA61o3mQ7+Q=",
+                                        "archivos": {
+                                            "xml": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/FIRMA/20000000001-01-F001-94455099.xml",
+                                            "cdr": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/CDR/R-20000000001-01-F001-94455099.xml",
+                                            "pdf": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/PDF/20000000001-01-F001-94455099.pdf"
+                                        },
+                                        "creado": "2026-11-11 22:45:01"
+                                    },
+                                    "request_id": "req_2b34bdbb48099d3b"
+                                }
+                            }
+                        },
+                        "headers": {
+                            "Idempotent-Replay": {
+                                "description": "true cuando se devuelve el resultado guardado de una peticion repetida.",
+                                "schema": {
+                                    "type": "string",
+                                    "enum": [
+                                        "true"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/R400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/R401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/R403"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/R409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/R413"
+                    },
+                    "422": {
+                        "$ref": "#/components/responses/R422"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/R500"
+                    },
+                    "502": {
+                        "$ref": "#/components/responses/R502"
+                    },
+                    "504": {
+                        "$ref": "#/components/responses/R504"
+                    }
+                },
+                "parameters": [
+                    {
+                        "$ref": "#/components/parameters/IdempotencyKey"
+                    }
+                ]
+            }
+        },
+        "/guias": {
+            "post": {
+                "tags": [
+                    "Guías de remisión"
+                ],
+                "operationId": "emitirGuia",
+                "summary": "Guía de remisión remitente (09)",
+                "description": "**Importante:** SUNAT no tiene entorno de pruebas para guías de remisión. Con una llave `test` la guía se genera y firma pero **no se envía** (`estado` = `simulado`). Con una llave `live` **se emite de verdad y no se puede borrar**.\n\nCon llave `live` requiere credenciales GRE de la empresa. Si SUNAT devuelve un ticket, `estado` = `pendiente`: consulte con `POST /tickets` (`tipo` = `guia`).",
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/GuiaRequest"
+                            },
+                            "examples": {
+                                "guia": {
+                                    "summary": "Guía por venta",
+                                    "value": {
+                                        "destinatario": {
+                                            "codigo_tipo_entidad": "1",
+                                            "numero_documento": "12345678",
+                                            "razon_social_nombres": "JUAN PEREZ GARCIA"
+                                        },
+                                        "guia": {
+                                            "serie": "T001",
+                                            "numero": "00000001",
+                                            "fecha_emision": "2026-11-11",
+                                            "hora_emision": "07:00:00",
+                                            "fecha_entrega_bienes_transportista": "2026-11-11",
+                                            "fecha_inicio_traslado": "2026-11-11",
+                                            "motivo_traslado_codigo": "01",
+                                            "peso_total": 5,
+                                            "unidad_peso": "KGM",
+                                            "cantidad_bultos": 1,
+                                            "direccion_partida": "AV. LIMA 123",
+                                            "ubigeo_partida": "150101",
+                                            "direccion_llegada": "AV. CLIENTE 456",
+                                            "ubigeo_llegada": "150101",
+                                            "transporte_publico": false,
+                                            "observacion": ""
+                                        },
+                                        "vehiculos": [
+                                            {
+                                                "placa": "ABC123",
+                                                "principal": true
+                                            }
+                                        ],
+                                        "conductores": [
+                                            {
+                                                "tipo_documento": "1",
+                                                "numero_documento": "12345678",
+                                                "nombres": "JUAN",
+                                                "apellidos": "PEREZ GARCIA",
+                                                "licencia": "Q12345678",
+                                                "principal": true
+                                            }
+                                        ],
+                                        "items": [
+                                            {
+                                                "codigo_producto": "cc1",
+                                                "producto": "PRODUCTO DE EJEMPLO",
+                                                "codigo_sunat": "43211503",
+                                                "cantidad": 1,
+                                                "codigo_unidad": "NIU"
+                                            }
+                                        ],
+                                        "documentos_relacionados": [
+                                            {
+                                                "tipo_documento": "03",
+                                                "serie": "B001",
+                                                "numero": "00000001",
+                                                "ruc_emisor": "20000000001"
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Procesado. El campo `estado` indica el resultado en SUNAT.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/Documento"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                },
+                                "example": {
+                                    "ok": true,
+                                    "data": {
+                                        "id": "doc_a1b2c3d4e5f60718293a",
+                                        "tipo": "09",
+                                        "serie": "T001",
+                                        "numero": "00000001",
+                                        "entorno": "prueba",
+                                        "estado": "simulado",
+                                        "sunat": {
+                                            "codigo": "NO_ENVIADO",
+                                            "descripcion": "Modo prueba: la guia se genero y firmo pero NO se envio a SUNAT, porque la API de guias no tiene entorno beta. Use una llave live para emitirla de verdad."
+                                        },
+                                        "ticket": null,
+                                        "hash": null,
+                                        "archivos": {
+                                            "xml": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/GUIA/FIRMA/20000000001-09-T001-00000001.xml"
+                                        },
+                                        "creado": "2026-11-11 23:10:00"
+                                    },
+                                    "request_id": "req_5c9fdc752c96fc22"
+                                }
+                            }
+                        }
+                    },
+                    "200": {
+                        "description": "Peticion repetida con la misma `Idempotency-Key`: devuelve el resultado guardado.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/Documento"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                },
+                                "example": {
+                                    "ok": true,
+                                    "data": {
+                                        "id": "doc_a1b2c3d4e5f60718293a",
+                                        "tipo": "09",
+                                        "serie": "T001",
+                                        "numero": "00000001",
+                                        "entorno": "prueba",
+                                        "estado": "simulado",
+                                        "sunat": {
+                                            "codigo": "NO_ENVIADO",
+                                            "descripcion": "Modo prueba: la guia se genero y firmo pero NO se envio a SUNAT, porque la API de guias no tiene entorno beta. Use una llave live para emitirla de verdad."
+                                        },
+                                        "ticket": null,
+                                        "hash": null,
+                                        "archivos": {
+                                            "xml": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/GUIA/FIRMA/20000000001-09-T001-00000001.xml"
+                                        },
+                                        "creado": "2026-11-11 23:10:00"
+                                    },
+                                    "request_id": "req_2b34bdbb48099d3b"
+                                }
+                            }
+                        },
+                        "headers": {
+                            "Idempotent-Replay": {
+                                "description": "true cuando se devuelve el resultado guardado de una peticion repetida.",
+                                "schema": {
+                                    "type": "string",
+                                    "enum": [
+                                        "true"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/R400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/R401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/R403"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/R409"
+                    },
+                    "413": {
+                        "$ref": "#/components/responses/R413"
+                    },
+                    "422": {
+                        "$ref": "#/components/responses/R422"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/R500"
+                    },
+                    "502": {
+                        "$ref": "#/components/responses/R502"
+                    },
+                    "504": {
+                        "$ref": "#/components/responses/R504"
+                    }
+                },
+                "parameters": [
+                    {
+                        "$ref": "#/components/parameters/IdempotencyKey"
+                    }
+                ]
+            }
+        },
+        "/tickets": {
+            "post": {
+                "tags": [
+                    "Consultas"
+                ],
+                "operationId": "consultarTicket",
+                "summary": "Consultar el resultado de un ticket",
+                "description": "Para `guia` devuelve el estado normalizado (`aceptado`/`rechazado`/`pendiente`) y guarda el CDR. Para `resumen` y `baja` devuelve la respuesta de SUNAT en `detalle`. **Nota:** el servicio de consulta de tickets de SUNAT puede tardar o no responder; la API espera como máximo 25 segundos y responde `504 tiempo_agotado` (reintente en unos minutos).",
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/TicketRequest"
+                            },
+                            "examples": {
+                                "guia": {
+                                    "summary": "Ticket de guía",
+                                    "value": {
+                                        "tipo": "guia",
+                                        "ticket": "50c6032c-a307-444d-8ffa-c86208ba91fa"
+                                    }
+                                },
+                                "resumen": {
+                                    "summary": "Ticket de resumen",
+                                    "value": {
+                                        "tipo": "resumen",
+                                        "ticket": "1794437855236",
+                                        "correlativo": "1",
+                                        "fecha_ticket": "2026-11-11"
+                                    }
+                                },
+                                "baja": {
+                                    "summary": "Ticket de baja",
+                                    "value": {
+                                        "tipo": "baja",
+                                        "ticket": "1794437855236"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "400": {
+                        "$ref": "#/components/responses/R400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/R401"
+                    },
+                    "422": {
+                        "$ref": "#/components/responses/R422"
+                    },
+                    "502": {
+                        "$ref": "#/components/responses/R502"
+                    },
+                    "504": {
+                        "$ref": "#/components/responses/R504"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/R500"
+                    },
+                    "200": {
+                        "description": "Resultado de la consulta.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "oneOf": [
+                                                {
+                                                    "$ref": "#/components/schemas/TicketResultado"
+                                                },
+                                                {
+                                                    "$ref": "#/components/schemas/TicketDetalle"
+                                                }
+                                            ]
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/documentos": {
+            "get": {
+                "tags": [
+                    "Historial"
+                ],
+                "operationId": "listarDocumentos",
+                "summary": "Listar documentos emitidos",
+                "description": "Historial de la empresa **en el entorno de la llave usada** (las pruebas no se mezclan con producción), del más reciente al más antiguo.",
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ],
+                "parameters": [
+                    {
+                        "name": "tipo",
+                        "in": "query",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Filtra por tipo (`01`, `03`, `07`, `08`, `20`, `09`, `RC`, `RA`, `RR`)."
+                    },
+                    {
+                        "name": "estado",
+                        "in": "query",
+                        "schema": {
+                            "$ref": "#/components/schemas/Estado"
+                        },
+                        "description": "Filtra por estado."
+                    },
+                    {
+                        "name": "serie",
+                        "in": "query",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Filtra por serie."
+                    },
+                    {
+                        "name": "numero",
+                        "in": "query",
+                        "schema": {
+                            "type": "string",
+                            "pattern": "^\\d{1,8}$"
+                        },
+                        "description": "Filtra por número (`150` y `00000150` son el mismo)."
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "schema": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 100,
+                            "default": 20
+                        },
+                        "description": "Máximo por página."
+                    },
+                    {
+                        "name": "offset",
+                        "in": "query",
+                        "schema": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 0
+                        },
+                        "description": "Desde qué posición."
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Página de documentos.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/Listado"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/R401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/R403"
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/R405"
+                    }
+                }
+            }
+        },
+        "/documentos/{id}": {
+            "get": {
+                "tags": [
+                    "Historial"
+                ],
+                "operationId": "obtenerDocumento",
+                "summary": "Detalle de un documento",
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ],
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "pattern": "^doc_[a-f0-9]{20}$"
+                        },
+                        "example": "doc_0e7ded8531fd33aede36"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "El documento.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/Documento"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                },
+                                "example": {
+                                    "ok": true,
+                                    "data": {
+                                        "id": "doc_0e7ded8531fd33aede36",
+                                        "tipo": "01",
+                                        "serie": "F001",
+                                        "numero": "94455099",
+                                        "entorno": "prueba",
+                                        "estado": "aceptado",
+                                        "sunat": {
+                                            "codigo": "0",
+                                            "descripcion": "La Factura numero F001-94455099, ha sido aceptada"
+                                        },
+                                        "ticket": null,
+                                        "hash": "DpL3Tb7gsOql6mMKZA61o3mQ7+Q=",
+                                        "archivos": {
+                                            "xml": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/FIRMA/20000000001-01-F001-94455099.xml",
+                                            "cdr": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/CDR/R-20000000001-01-F001-94455099.xml",
+                                            "pdf": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/PDF/20000000001-01-F001-94455099.pdf"
+                                        },
+                                        "creado": "2026-11-11 22:45:01"
+                                    },
+                                    "request_id": "req_x"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/R401"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/R404"
+                    }
+                }
+            }
+        },
+        "/series": {
+            "get": {
+                "tags": [
+                    "Series y numeración"
+                ],
+                "operationId": "listarSeries",
+                "summary": "Listar series y su siguiente número",
+                "description": "Las series de **este entorno** (las de prueba y las de producción son independientes). Las series que su sistema comercial usa en modo `cliente` aparecen solas después del primer envío.",
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Series.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/ListadoSeries"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                },
+                                "example": {
+                                    "ok": true,
+                                    "data": {
+                                        "items": [
+                                            {
+                                                "tipo": "03",
+                                                "serie": "B001",
+                                                "modo": "api",
+                                                "entorno": "prueba",
+                                                "ultimo_numero": 3,
+                                                "siguiente_numero": "00000004",
+                                                "reservas_abiertas": 0
+                                            }
+                                        ]
+                                    },
+                                    "request_id": "req_x"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/R401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/R403"
+                    }
+                }
+            },
+            "post": {
+                "tags": [
+                    "Series y numeración"
+                ],
+                "operationId": "guardarSerie",
+                "summary": "Registrar o actualizar una serie",
+                "description": "Define quién numera la serie y desde dónde continúa. Si la serie ya existe, actualiza su modo; el contador **solo sube** (nunca baja) y nunca queda por debajo de lo ya usado.\n\nPara **migrar** desde su sistema comercial, registre la serie con `ultimo_numero` = el último número que ya emitió.",
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/SerieRequest"
+                            },
+                            "examples": {
+                                "api": {
+                                    "summary": "La API numera la serie",
+                                    "value": {
+                                        "tipo": "03",
+                                        "serie": "B001",
+                                        "modo": "api",
+                                        "ultimo_numero": 0
+                                    }
+                                },
+                                "cliente": {
+                                    "summary": "Su sistema numera; continúa desde el 150",
+                                    "value": {
+                                        "tipo": "03",
+                                        "serie": "B002",
+                                        "modo": "cliente",
+                                        "ultimo_numero": 150
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Serie creada.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/Serie"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                },
+                                "example": {
+                                    "ok": true,
+                                    "data": {
+                                        "tipo": "03",
+                                        "serie": "B001",
+                                        "modo": "api",
+                                        "entorno": "prueba",
+                                        "ultimo_numero": 3,
+                                        "siguiente_numero": "00000004",
+                                        "reservas_abiertas": 0
+                                    },
+                                    "request_id": "req_x"
+                                }
+                            }
+                        }
+                    },
+                    "200": {
+                        "description": "Serie actualizada.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/Serie"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/R400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/R401"
+                    },
+                    "422": {
+                        "$ref": "#/components/responses/R422"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/R500"
+                    }
+                }
+            }
+        },
+        "/series/reservar": {
+            "post": {
+                "tags": [
+                    "Series y numeración"
+                ],
+                "operationId": "reservarNumeros",
+                "summary": "Reservar números para enviarlos después",
+                "description": "Aparta números consecutivos de una serie en modo `api`. Úselo cuando su sistema comercial debe **entregar el comprobante al cliente antes de enviarlo a SUNAT**: imprima el número reservado y envíe el comprobante después con `POST /comprobantes` usando **ese mismo** `venta.numero`.\n\nMientras no se envíe, el documento figura como `reservado` (`GET /comprobantes/{tipo}/{serie}/{numero}`). La reserva es atómica: peticiones simultáneas nunca reciben el mismo número.",
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/ReservaRequest"
+                            },
+                            "examples": {
+                                "reservar": {
+                                    "summary": "Reservar 2 números de la serie B001",
+                                    "value": {
+                                        "tipo": "03",
+                                        "serie": "B001",
+                                        "cantidad": 2
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Números reservados.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/Reserva"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                },
+                                "example": {
+                                    "ok": true,
+                                    "data": {
+                                        "tipo": "03",
+                                        "serie": "B001",
+                                        "numeros": [
+                                            "00000004",
+                                            "00000005"
+                                        ],
+                                        "aviso": "Reservados. Use cada numero al enviar el comprobante."
+                                    },
+                                    "request_id": "req_x"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/R400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/R401"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/R404"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/R409"
+                    },
+                    "422": {
+                        "$ref": "#/components/responses/R422"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/R500"
+                    }
+                }
+            }
+        },
+        "/comprobantes/{tipo}/{serie}/{numero}": {
+            "get": {
+                "tags": [
+                    "Series y numeración"
+                ],
+                "operationId": "consultarPorNumero",
+                "summary": "Consultar un documento por tipo, serie y número",
+                "description": "Devuelve el documento más reciente con ese tipo-serie-número en este entorno: `reservado`, `aceptado`, `rechazado`, etc. `150` y `00000150` son el mismo. Responde `404` si todavía no se envió ni se reservó.",
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ],
+                "parameters": [
+                    {
+                        "name": "tipo",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "enum": [
+                                "01",
+                                "03",
+                                "07",
+                                "08",
+                                "20",
+                                "09"
+                            ]
+                        },
+                        "example": "03"
+                    },
+                    {
+                        "name": "serie",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9]{4}$"
+                        },
+                        "example": "B001"
+                    },
+                    {
+                        "name": "numero",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "pattern": "^\\d{1,8}$"
+                        },
+                        "example": "4"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "El documento.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/Documento"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/R401"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/R404"
+                    }
+                }
+            }
+        }
+    },
+    "components": {
+        "securitySchemes": {
+            "bearerAuth": {
+                "type": "http",
+                "scheme": "bearer",
+                "bearerFormat": "sk_test_… / sk_live_…",
+                "description": "API key. `sk_test_` = pruebas (SUNAT beta), `sk_live_` = producción."
+            }
+        },
+        "parameters": {
+            "IdempotencyKey": {
+                "name": "Idempotency-Key",
+                "in": "header",
+                "required": false,
+                "schema": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9._\\-]{1,64}$"
+                },
+                "description": "Clave unica por operacion (hasta 64 caracteres: letras, numeros, . _ -). Si la peticion se repite con la misma clave y el mismo cuerpo, se devuelve el resultado guardado (200 + cabecera Idempotent-Replay) sin volver a enviar a SUNAT. Con la misma clave y otro cuerpo responde 409. **Recomendado siempre** para poder reintentar tras un corte de red.",
+                "example": "venta-12345"
+            },
+            "Incluir": {
+                "name": "incluir",
+                "in": "query",
+                "required": false,
+                "schema": {
+                    "type": "string",
+                    "enum": [
+                        "archivos"
+                    ]
+                },
+                "description": "Con `archivos` la respuesta agrega `xml_base_64` y `cdr_base_64` (el XML firmado y la constancia de SUNAT) para guardarlos sin una segunda descarga."
+            }
+        },
+        "schemas": {
+            "Estado": {
+                "type": "string",
+                "enum": [
+                    "aceptado",
+                    "rechazado",
+                    "pendiente",
+                    "simulado",
+                    "reservado",
+                    "procesando",
+                    "error"
+                ],
+                "description": "- `aceptado`: SUNAT aceptó el documento (tiene CDR).\n- `rechazado`: SUNAT lo rechazó; `sunat.codigo` y `sunat.descripcion` explican el motivo. **El HTTP sigue siendo 201**: el rechazo es un resultado de negocio, no un error de la API. Corrija los datos y envíe de nuevo.\n- `pendiente`: SUNAT lo recibió y devolvió un `ticket`; consulte el resultado con `POST /tickets`.\n- `simulado`: solo con llave `test` en guías de remisión: se generó y firmó pero **no se envió** (SUNAT no tiene entorno de pruebas para guías).\n- `reservado`: número apartado con `POST /series/reservar` que todavía no se envió a SUNAT.\n- `procesando`: la API lo está enviando, o un intento anterior se interrumpió; reintente con la **misma** `Idempotency-Key`.\n- `error`: el envío falló antes de recibir respuesta de SUNAT (por ejemplo, SUNAT caído). **El número queda guardado**: reintente con la misma `Idempotency-Key` y se reutiliza."
+            },
+            "Sunat": {
+                "type": "object",
+                "properties": {
+                    "codigo": {
+                        "type": "string",
+                        "description": "Código de SUNAT (`0` = aceptado) o un código interno.",
+                        "nullable": true,
+                        "example": "0"
+                    },
+                    "descripcion": {
+                        "type": "string",
+                        "description": "Mensaje de SUNAT.",
+                        "nullable": true
+                    }
+                }
+            },
+            "Archivos": {
+                "type": "object",
+                "properties": {
+                    "xml": {
+                        "type": "string",
+                        "description": "Enlace al XML firmado.",
+                        "format": "uri"
+                    },
+                    "cdr": {
+                        "type": "string",
+                        "description": "Enlace a la Constancia de Recepción (CDR) de SUNAT.",
+                        "format": "uri"
+                    },
+                    "pdf": {
+                        "type": "string",
+                        "description": "Enlace al PDF (si existe).",
+                        "format": "uri"
+                    },
+                    "xml_base_64": {
+                        "type": "string",
+                        "description": "Solo con `?incluir=archivos`: ZIP con el XML firmado, en base64."
+                    },
+                    "cdr_base_64": {
+                        "type": "string",
+                        "description": "Solo con `?incluir=archivos`: ZIP con el CDR, en base64."
+                    }
+                },
+                "description": "Los enlaces que aplican según el documento y su estado. Puede venir vacío (`{}`) si SUNAT lo rechazó o está pendiente."
+            },
+            "Documento": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Identificador del documento en esta API.",
+                        "example": "doc_0e7ded8531fd33aede36"
+                    },
+                    "tipo": {
+                        "type": "string",
+                        "description": "Tipo SUNAT: `01` factura, `03` boleta, `07` nota de crédito, `08` nota de débito, `20` retención, `09` guía de remisión, `RC` resumen diario, `RA` baja, `RR` reversión."
+                    },
+                    "serie": {
+                        "type": "string",
+                        "description": "Serie del documento (en `RC` es la fecha AAAAMMDD; en `RR` la fecha del resumen).",
+                        "nullable": true
+                    },
+                    "numero": {
+                        "type": "string",
+                        "description": "Número del documento (en `RC`/`RR` el correlativo; en `RA` \"número#correlativo\").",
+                        "nullable": true
+                    },
+                    "entorno": {
+                        "type": "string",
+                        "enum": [
+                            "prueba",
+                            "produccion"
+                        ]
+                    },
+                    "estado": {
+                        "$ref": "#/components/schemas/Estado"
+                    },
+                    "sunat": {
+                        "$ref": "#/components/schemas/Sunat"
+                    },
+                    "ticket": {
+                        "type": "string",
+                        "description": "Ticket de SUNAT (resumen, baja, reversión, guía) o null.",
+                        "nullable": true
+                    },
+                    "hash": {
+                        "type": "string",
+                        "description": "Valor resumen (hash) de la firma digital del XML.",
+                        "nullable": true
+                    },
+                    "archivos": {
+                        "$ref": "#/components/schemas/Archivos"
+                    },
+                    "creado": {
+                        "type": "string",
+                        "description": "Fecha y hora (Lima) en que se registró.",
+                        "example": "2026-11-11 22:45:01"
+                    }
+                },
+                "required": [
+                    "id",
+                    "tipo",
+                    "entorno",
+                    "estado",
+                    "sunat",
+                    "archivos",
+                    "creado"
+                ]
+            },
+            "ErrorDetalle": {
+                "type": "object",
+                "properties": {
+                    "campo": {
+                        "type": "string",
+                        "description": "Ruta del campo con problema.",
+                        "example": "venta.serie"
+                    },
+                    "mensaje": {
+                        "type": "string",
+                        "description": "Qué corregir."
+                    }
+                },
+                "required": [
+                    "campo",
+                    "mensaje"
+                ]
+            },
+            "Error": {
+                "type": "object",
+                "properties": {
+                    "ok": {
+                        "type": "boolean",
+                        "example": false
+                    },
+                    "error": {
+                        "type": "object",
+                        "properties": {
+                            "code": {
+                                "type": "string",
+                                "description": "Código estable para programar la respuesta (ver tabla en la descripción general).",
+                                "example": "validacion"
+                            },
+                            "message": {
+                                "type": "string",
+                                "description": "Explicación legible."
+                            },
+                            "details": {
+                                "type": "array",
+                                "items": {
+                                    "$ref": "#/components/schemas/ErrorDetalle"
+                                },
+                                "description": "Solo en `validacion`: un elemento por campo con error."
+                            }
+                        },
+                        "required": [
+                            "code",
+                            "message"
+                        ]
+                    },
+                    "request_id": {
+                        "type": "string",
+                        "description": "Cite este valor al pedir soporte."
+                    }
+                },
+                "required": [
+                    "ok",
+                    "error",
+                    "request_id"
+                ]
+            },
+            "Cliente": {
+                "type": "object",
+                "properties": {
+                    "codigo_tipo_entidad": {
+                        "type": "string",
+                        "enum": [
+                            "0",
+                            "1",
+                            "4",
+                            "6",
+                            "7",
+                            "A"
+                        ],
+                        "description": "Tipo de documento del cliente (catálogo 06): `1` DNI, `6` RUC, `4` carnet de extranjería, `7` pasaporte, `0` sin documento, `A` cédula diplomática. **Una factura exige `6`.**"
+                    },
+                    "numero_documento": {
+                        "type": "string",
+                        "description": "DNI de 8 dígitos o RUC de 11.",
+                        "example": "20987654321"
+                    },
+                    "razon_social_nombres": {
+                        "type": "string",
+                        "description": "Razón social o nombres."
+                    },
+                    "cliente_direccion": {
+                        "type": "string",
+                        "description": "Dirección (opcional)."
+                    }
+                },
+                "required": [
+                    "codigo_tipo_entidad",
+                    "numero_documento",
+                    "razon_social_nombres"
+                ]
+            },
+            "Item": {
+                "type": "object",
+                "properties": {
+                    "codigo_producto": {
+                        "type": "string",
+                        "description": "Código interno del producto (opcional)."
+                    },
+                    "producto": {
+                        "type": "string",
+                        "description": "Descripción."
+                    },
+                    "codigo_sunat": {
+                        "type": "string",
+                        "description": "Código de producto SUNAT de **8 dígitos** (catálogo 25). SUNAT rechaza el comprobante si falta.",
+                        "pattern": "^\\d{8}$",
+                        "example": "50202201"
+                    },
+                    "cantidad": {
+                        "type": "number",
+                        "description": "Mayor a 0.",
+                        "exclusiveMinimum": 0
+                    },
+                    "codigo_unidad": {
+                        "type": "string",
+                        "description": "Unidad (catálogo 03): `NIU` unidad, `ZZ` servicio, `KGM` kilo...",
+                        "example": "NIU"
+                    },
+                    "precio_base": {
+                        "type": "number",
+                        "description": "**Precio unitario SIN IGV.** Mayor o igual a 0.",
+                        "minimum": 0
+                    },
+                    "tipo_igv_codigo": {
+                        "type": "string",
+                        "description": "Afectación del IGV (catálogo 07): `10` gravado, `20` exonerado, `30` inafecto, `40` exportación, `11`–`17` gratuito.",
+                        "example": "10"
+                    },
+                    "descuento_precio_base": {
+                        "type": "number",
+                        "description": "Descuento por unidad (opcional)."
+                    },
+                    "bolsa": {
+                        "type": "boolean",
+                        "description": "Impuesto a la bolsa plástica (opcional)."
+                    }
+                },
+                "required": [
+                    "producto",
+                    "codigo_sunat",
+                    "cantidad",
+                    "codigo_unidad",
+                    "precio_base",
+                    "tipo_igv_codigo"
+                ]
+            },
+            "Cuota": {
+                "type": "object",
+                "properties": {
+                    "monto": {
+                        "type": "number",
+                        "description": "Monto de la cuota."
+                    },
+                    "fecha_cuota": {
+                        "type": "string",
+                        "description": "AAAA-MM-DD. **Debe ser posterior a la fecha de emisión.**",
+                        "format": "date"
+                    }
+                },
+                "required": [
+                    "monto",
+                    "fecha_cuota"
+                ]
+            },
+            "Venta": {
+                "type": "object",
+                "properties": {
+                    "tipo_documento_codigo": {
+                        "type": "string",
+                        "enum": [
+                            "01",
+                            "03",
+                            "07",
+                            "08"
+                        ],
+                        "description": "`01` factura, `03` boleta, `07` nota de crédito, `08` nota de débito."
+                    },
+                    "serie": {
+                        "type": "string",
+                        "description": "4 caracteres. Factura: empieza con `F`; boleta: `B`; notas: `F` o `B` (según lo que modifican).",
+                        "example": "F001"
+                    },
+                    "numero": {
+                        "type": "string",
+                        "description": "Solo dígitos, máximo 8 (`150` y `00000150` son el mismo). **Opcional si la serie está en modo `api`**: omítalo y la API asigna el siguiente (exige `Idempotency-Key`). En modo `cliente` (por defecto) es obligatorio.",
+                        "pattern": "^\\d{1,8}$"
+                    },
+                    "fecha_emision": {
+                        "type": "string",
+                        "description": "AAAA-MM-DD. SUNAT rechaza fechas fuera de su plazo de envío.",
+                        "format": "date"
+                    },
+                    "hora_emision": {
+                        "type": "string",
+                        "description": "HH:MM:SS",
+                        "example": "10:00:00"
+                    },
+                    "fecha_vencimiento": {
+                        "type": "string",
+                        "description": "AAAA-MM-DD (opcional, facturas y boletas).",
+                        "format": "date"
+                    },
+                    "moneda_id": {
+                        "type": "integer",
+                        "enum": [
+                            1,
+                            2,
+                            3
+                        ],
+                        "description": "1 soles (PEN), 2 dólares (USD), 3 euros (EUR)."
+                    },
+                    "forma_pago_id": {
+                        "type": "integer",
+                        "enum": [
+                            1,
+                            2
+                        ],
+                        "description": "1 contado, 2 crédito (exige `cuotas`)."
+                    },
+                    "total_gravada": {
+                        "type": "number",
+                        "description": "Suma de los valores de venta gravados con IGV (sin IGV)."
+                    },
+                    "total_igv": {
+                        "type": "number",
+                        "description": "18 % de `total_gravada` (se valida con tolerancia de 0.02 salvo que haya `descuento_global`)."
+                    },
+                    "total_exonerada": {
+                        "type": "number",
+                        "description": "Opcional.",
+                        "nullable": true
+                    },
+                    "total_inafecta": {
+                        "type": "number",
+                        "description": "Opcional.",
+                        "nullable": true
+                    },
+                    "total_gratuita": {
+                        "type": "number",
+                        "description": "Opcional.",
+                        "nullable": true
+                    },
+                    "total_gratuita_igv": {
+                        "type": "number",
+                        "description": "Opcional.",
+                        "nullable": true
+                    },
+                    "total_bolsa": {
+                        "type": "number",
+                        "description": "Opcional.",
+                        "nullable": true
+                    },
+                    "descuento_global": {
+                        "type": "number",
+                        "description": "Opcional."
+                    },
+                    "orden_compra": {
+                        "type": "string",
+                        "description": "Opcional."
+                    },
+                    "nota": {
+                        "type": "string",
+                        "description": "Observaciones (opcional)."
+                    },
+                    "detraccion_codigo": {
+                        "type": "string",
+                        "description": "Opcional."
+                    },
+                    "detraccion_porcentaje": {
+                        "type": "number",
+                        "description": "Opcional.",
+                        "nullable": true
+                    },
+                    "percepcion_codigo": {
+                        "type": "string",
+                        "description": "Opcional."
+                    },
+                    "percepcion_porcentaje": {
+                        "type": "number",
+                        "description": "Opcional.",
+                        "nullable": true
+                    },
+                    "retencion_porcentaje": {
+                        "type": "number",
+                        "description": "Opcional.",
+                        "nullable": true
+                    },
+                    "relacionado_serie": {
+                        "type": "string",
+                        "description": "**Solo notas (07/08):** serie del documento que se modifica."
+                    },
+                    "relacionado_numero": {
+                        "type": "string",
+                        "description": "**Solo notas:** número del documento que se modifica."
+                    },
+                    "relacionado_tipo_documento": {
+                        "type": "string",
+                        "enum": [
+                            "01",
+                            "03"
+                        ],
+                        "description": "**Solo notas:** `01` factura o `03` boleta."
+                    },
+                    "relacionado_motivo_codigo": {
+                        "type": "string",
+                        "description": "**Solo notas:** motivo, `01` a `13` (catálogos 09 y 10 de SUNAT; ej. nota de crédito `01` anulación de la operación, `06` devolución total, `07` devolución por ítem)."
+                    }
+                },
+                "required": [
+                    "tipo_documento_codigo",
+                    "serie",
+                    "fecha_emision",
+                    "hora_emision",
+                    "moneda_id",
+                    "forma_pago_id"
+                ]
+            },
+            "ComprobanteRequest": {
+                "type": "object",
+                "properties": {
+                    "cliente": {
+                        "$ref": "#/components/schemas/Cliente"
+                    },
+                    "venta": {
+                        "$ref": "#/components/schemas/Venta"
+                    },
+                    "items": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "$ref": "#/components/schemas/Item"
+                        }
+                    },
+                    "cuotas": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/Cuota"
+                        },
+                        "description": "Obligatorio si `forma_pago_id` = 2."
+                    },
+                    "guias_adjuntas": {
+                        "type": "array",
+                        "items": {
+                            "type": "object"
+                        },
+                        "description": "Opcional."
+                    },
+                    "anticipos": {
+                        "type": "array",
+                        "items": {
+                            "type": "object"
+                        },
+                        "description": "Opcional."
+                    }
+                },
+                "required": [
+                    "cliente",
+                    "venta",
+                    "items"
+                ],
+                "description": "No envíe `empresa`: el emisor, la clave SOL y el certificado salen de la configuración de su empresa en la API (cualquier `empresa` enviada se ignora)."
+            },
+            "ResumenRequest": {
+                "type": "object",
+                "properties": {
+                    "resumen": {
+                        "type": "object",
+                        "properties": {
+                            "numero": {
+                                "type": "string",
+                                "description": "Fecha del resumen AAAAMMDD.",
+                                "example": "20261111"
+                            },
+                            "correlativo": {
+                                "type": "string",
+                                "description": "Correlativo del día (1 a 5 dígitos). **Opcional**: si lo omite, la API asigna el siguiente del día (exige `Idempotency-Key`)."
+                            },
+                            "fecha_documentos": {
+                                "type": "string",
+                                "description": "Fecha de emisión de las boletas.",
+                                "format": "date"
+                            },
+                            "fecha_resumen": {
+                                "type": "string",
+                                "description": "Fecha en que se envía el resumen.",
+                                "format": "date"
+                            }
+                        },
+                        "required": [
+                            "numero",
+                            "fecha_documentos",
+                            "fecha_resumen"
+                        ]
+                    },
+                    "comprobantes": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "tipo_documento": {
+                                    "type": "string",
+                                    "description": "`03` boleta, `07`/`08` notas de boletas."
+                                },
+                                "serie": {
+                                    "type": "string",
+                                    "description": "Serie."
+                                },
+                                "numero": {
+                                    "type": "string",
+                                    "description": "Número."
+                                },
+                                "cliente_numero_documento": {
+                                    "type": "string",
+                                    "description": "Documento del cliente."
+                                },
+                                "cliente_tipo_documento": {
+                                    "type": "string",
+                                    "description": "Tipo de documento del cliente."
+                                },
+                                "total_a_pagar": {
+                                    "type": "number",
+                                    "description": "Total."
+                                },
+                                "total_gravada": {
+                                    "type": "number",
+                                    "description": "Opcional."
+                                },
+                                "total_igv": {
+                                    "type": "number",
+                                    "description": "Opcional."
+                                },
+                                "total_exonerada": {
+                                    "description": "Opcional."
+                                },
+                                "total_inafecta": {
+                                    "description": "Opcional."
+                                },
+                                "total_gratuita": {
+                                    "description": "Opcional."
+                                },
+                                "status": {
+                                    "type": "string",
+                                    "enum": [
+                                        "1",
+                                        "2",
+                                        "3"
+                                    ],
+                                    "description": "`1` emitida, `2` modificada, `3` **anulada** (así se anula una boleta)."
+                                }
+                            },
+                            "required": [
+                                "tipo_documento",
+                                "serie",
+                                "numero",
+                                "cliente_numero_documento",
+                                "cliente_tipo_documento",
+                                "total_a_pagar",
+                                "status"
+                            ]
+                        }
+                    }
+                },
+                "required": [
+                    "resumen",
+                    "comprobantes"
+                ]
+            },
+            "BajaRequest": {
+                "type": "object",
+                "properties": {
+                    "anulacion": {
+                        "type": "object",
+                        "properties": {
+                            "correlativo_diario": {
+                                "type": "string",
+                                "description": "Correlativo del día, **distinto en cada envío** (1 a 5 dígitos). **Opcional**: si lo omite, la API asigna el siguiente del día (exige `Idempotency-Key`)."
+                            },
+                            "fecha_comprobante": {
+                                "type": "string",
+                                "description": "Fecha de emisión del comprobante.",
+                                "format": "date"
+                            },
+                            "tipo_documento_codigo": {
+                                "type": "string",
+                                "enum": [
+                                    "01",
+                                    "07",
+                                    "08"
+                                ],
+                                "description": "Solo facturas y notas. **Las boletas no se dan de baja: use un resumen diario con `status` = 3.**"
+                            },
+                            "serie": {
+                                "type": "string",
+                                "description": "Serie."
+                            },
+                            "numero": {
+                                "type": "string",
+                                "description": "Número."
+                            }
+                        },
+                        "required": [
+                            "fecha_comprobante",
+                            "tipo_documento_codigo",
+                            "serie",
+                            "numero"
+                        ]
+                    }
+                },
+                "required": [
+                    "anulacion"
+                ],
+                "description": "Solo para comprobantes con menos de 7 días de emitidos."
+            },
+            "ReversionRequest": {
+                "type": "object",
+                "properties": {
+                    "reversion": {
+                        "type": "object",
+                        "properties": {
+                            "correlativo_diario": {
+                                "type": "string",
+                                "description": "Correlativo del día, distinto en cada envío. **Opcional**: si lo omite, la API asigna el siguiente del día (exige `Idempotency-Key`)."
+                            },
+                            "fecha_resumen": {
+                                "type": "string",
+                                "description": "Fecha.",
+                                "format": "date"
+                            },
+                            "fecha_documentos": {
+                                "type": "string",
+                                "description": "Fecha.",
+                                "format": "date"
+                            }
+                        },
+                        "required": [
+                            "fecha_resumen",
+                            "fecha_documentos"
+                        ]
+                    },
+                    "documento_relacionados": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "tipo_documento_codigo": {
+                                    "type": "string",
+                                    "description": "Ej. `20` retención."
+                                },
+                                "serie": {
+                                    "type": "string",
+                                    "description": "Serie."
+                                },
+                                "numero": {
+                                    "type": "string",
+                                    "description": "Número."
+                                },
+                                "descripcion": {
+                                    "type": "string",
+                                    "description": "Motivo."
+                                }
+                            },
+                            "required": [
+                                "tipo_documento_codigo",
+                                "serie",
+                                "numero",
+                                "descripcion"
+                            ]
+                        }
+                    }
+                },
+                "required": [
+                    "reversion",
+                    "documento_relacionados"
+                ]
+            },
+            "RetencionRequest": {
+                "type": "object",
+                "properties": {
+                    "proveedor": {
+                        "type": "object",
+                        "properties": {
+                            "ruc": {
+                                "type": "string",
+                                "description": "RUC de 11 dígitos."
+                            },
+                            "razon_social": {
+                                "type": "string",
+                                "description": "Razón social."
+                            }
+                        },
+                        "required": [
+                            "ruc",
+                            "razon_social"
+                        ]
+                    },
+                    "retencion": {
+                        "type": "object",
+                        "properties": {
+                            "serie": {
+                                "type": "string",
+                                "description": "Empieza con `R`.",
+                                "example": "R001"
+                            },
+                            "numero": {
+                                "type": "string",
+                                "description": "Solo dígitos, máximo 8. **Opcional si la serie está en modo `api`** (la API lo asigna; exige `Idempotency-Key`)."
+                            },
+                            "fecha_de_emision": {
+                                "type": "string",
+                                "description": "AAAA-MM-DD",
+                                "format": "date"
+                            },
+                            "codigo": {
+                                "type": "string",
+                                "enum": [
+                                    "01",
+                                    "02"
+                                ],
+                                "description": "`01` régimen de retención 3 %, `02` régimen especial 6 %."
+                            },
+                            "porcentaje": {
+                                "type": "number",
+                                "description": "Porcentaje."
+                            },
+                            "nota": {
+                                "type": "string",
+                                "description": "Opcional."
+                            },
+                            "total_retenido": {
+                                "type": "number",
+                                "description": "Total retenido."
+                            },
+                            "total_facturado_menos_retenido": {
+                                "type": "number",
+                                "description": "Total pagado menos lo retenido."
+                            }
+                        },
+                        "required": [
+                            "serie",
+                            "fecha_de_emision",
+                            "codigo",
+                            "total_retenido",
+                            "total_facturado_menos_retenido"
+                        ]
+                    },
+                    "documento_relacionados": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "description": "Comprobante sobre el que se retiene y su pago (ver ejemplo)."
+                        }
+                    }
+                },
+                "required": [
+                    "proveedor",
+                    "retencion",
+                    "documento_relacionados"
+                ],
+                "description": "El emisor es su empresa registrada (no se envía)."
+            },
+            "GuiaRequest": {
+                "type": "object",
+                "properties": {
+                    "destinatario": {
+                        "type": "object",
+                        "properties": {
+                            "codigo_tipo_entidad": {
+                                "type": "string",
+                                "description": "Tipo de documento."
+                            },
+                            "numero_documento": {
+                                "type": "string",
+                                "description": "Documento."
+                            },
+                            "razon_social_nombres": {
+                                "type": "string",
+                                "description": "Nombre o razón social."
+                            }
+                        },
+                        "required": [
+                            "numero_documento",
+                            "razon_social_nombres"
+                        ]
+                    },
+                    "guia": {
+                        "type": "object",
+                        "properties": {
+                            "serie": {
+                                "type": "string",
+                                "description": "Empieza con `T` (ej. T001).",
+                                "example": "T001"
+                            },
+                            "numero": {
+                                "type": "string",
+                                "description": "Solo dígitos, máximo 8. **Opcional si la serie está en modo `api`** (la API lo asigna; exige `Idempotency-Key`)."
+                            },
+                            "fecha_emision": {
+                                "type": "string",
+                                "description": "AAAA-MM-DD",
+                                "format": "date"
+                            },
+                            "hora_emision": {
+                                "type": "string",
+                                "description": "HH:MM:SS"
+                            },
+                            "fecha_inicio_traslado": {
+                                "type": "string",
+                                "description": "AAAA-MM-DD",
+                                "format": "date"
+                            },
+                            "fecha_entrega_bienes_transportista": {
+                                "type": "string",
+                                "description": "AAAA-MM-DD",
+                                "format": "date"
+                            },
+                            "motivo_traslado_codigo": {
+                                "type": "string",
+                                "description": "Catálogo 20: `01` venta, `04` traslado entre establecimientos..."
+                            },
+                            "peso_total": {
+                                "type": "number",
+                                "description": "Peso bruto total."
+                            },
+                            "unidad_peso": {
+                                "type": "string",
+                                "description": "`KGM` kilos."
+                            },
+                            "cantidad_bultos": {
+                                "type": "integer",
+                                "description": "Bultos."
+                            },
+                            "direccion_partida": {
+                                "type": "string",
+                                "description": "Dirección de partida."
+                            },
+                            "ubigeo_partida": {
+                                "type": "string",
+                                "description": "6 dígitos.",
+                                "pattern": "^\\d{6}$"
+                            },
+                            "direccion_llegada": {
+                                "type": "string",
+                                "description": "Dirección de llegada."
+                            },
+                            "ubigeo_llegada": {
+                                "type": "string",
+                                "description": "6 dígitos.",
+                                "pattern": "^\\d{6}$"
+                            },
+                            "transporte_publico": {
+                                "type": "boolean"
+                            },
+                            "observacion": {
+                                "type": "string",
+                                "description": "Opcional."
+                            }
+                        },
+                        "required": [
+                            "serie",
+                            "fecha_emision",
+                            "hora_emision",
+                            "fecha_inicio_traslado",
+                            "motivo_traslado_codigo",
+                            "peso_total",
+                            "ubigeo_partida",
+                            "ubigeo_llegada",
+                            "direccion_partida",
+                            "direccion_llegada"
+                        ]
+                    },
+                    "vehiculos": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "placa": {
+                                    "type": "string",
+                                    "description": "Placa."
+                                },
+                                "principal": {
+                                    "type": "boolean"
+                                }
+                            }
+                        }
+                    },
+                    "conductores": {
+                        "type": "array",
+                        "items": {
+                            "type": "object"
+                        }
+                    },
+                    "items": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object"
+                        }
+                    },
+                    "documentos_relacionados": {
+                        "type": "array",
+                        "items": {
+                            "type": "object"
+                        }
+                    },
+                    "transportista": {
+                        "type": "object"
+                    },
+                    "remitente": {
+                        "type": "object",
+                        "description": "Opcional: por defecto es su empresa."
+                    }
+                },
+                "required": [
+                    "destinatario",
+                    "guia",
+                    "items"
+                ],
+                "description": "Para emitir de verdad (llave `live`) la empresa necesita credenciales GRE (client_id y client_secret) registradas; con llave `test` no hacen falta porque no se envía."
+            },
+            "TicketRequest": {
+                "type": "object",
+                "properties": {
+                    "tipo": {
+                        "type": "string",
+                        "enum": [
+                            "guia",
+                            "resumen",
+                            "baja"
+                        ],
+                        "description": "Qué se consulta."
+                    },
+                    "ticket": {
+                        "type": "string",
+                        "description": "Ticket devuelto al enviar (6 a 80 caracteres)."
+                    },
+                    "correlativo": {
+                        "type": "string",
+                        "description": "**Solo `resumen`:** correlativo con que se envió."
+                    },
+                    "fecha_ticket": {
+                        "type": "string",
+                        "description": "**Solo `resumen`:** fecha del resumen AAAA-MM-DD.",
+                        "format": "date"
+                    }
+                },
+                "required": [
+                    "tipo",
+                    "ticket"
+                ]
+            },
+            "TicketResultado": {
+                "type": "object",
+                "properties": {
+                    "estado": {
+                        "$ref": "#/components/schemas/Estado"
+                    },
+                    "sunat": {
+                        "$ref": "#/components/schemas/Sunat"
+                    },
+                    "ticket": {
+                        "type": "string",
+                        "description": "Ticket.",
+                        "nullable": true
+                    },
+                    "hash": {
+                        "type": "string",
+                        "description": "Hash.",
+                        "nullable": true
+                    },
+                    "archivos": {
+                        "$ref": "#/components/schemas/Archivos"
+                    }
+                },
+                "required": [
+                    "estado",
+                    "sunat"
+                ]
+            },
+            "TicketDetalle": {
+                "type": "object",
+                "properties": {
+                    "ticket": {
+                        "type": "string",
+                        "description": "Ticket consultado."
+                    },
+                    "detalle": {
+                        "type": "object",
+                        "description": "Respuesta de SUNAT tal cual la devuelve el motor."
+                    }
+                },
+                "required": [
+                    "ticket",
+                    "detalle"
+                ]
+            },
+            "Certificado": {
+                "type": "object",
+                "properties": {
+                    "entorno": {
+                        "type": "string",
+                        "enum": [
+                            "prueba",
+                            "produccion"
+                        ]
+                    },
+                    "sujeto": {
+                        "type": "string",
+                        "description": "Titular del certificado."
+                    },
+                    "huella_sha256": {
+                        "type": "string",
+                        "description": "Huella SHA-256."
+                    },
+                    "serie": {
+                        "type": "string",
+                        "description": "Número de serie."
+                    },
+                    "valido_desde": {
+                        "type": "string",
+                        "description": "Fecha y hora."
+                    },
+                    "valido_hasta": {
+                        "type": "string",
+                        "description": "Fecha y hora."
+                    },
+                    "dias_restantes": {
+                        "type": "integer",
+                        "description": "Días hasta el vencimiento (negativo si venció)."
+                    },
+                    "vigente": {
+                        "type": "boolean"
+                    },
+                    "por_vencer": {
+                        "type": "boolean",
+                        "description": "true si vence en 30 días o menos."
+                    }
+                }
+            },
+            "CertificadoRequest": {
+                "description": "Envíe **una** de las dos opciones.",
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "pfx_base64": {
+                                "type": "string",
+                                "description": "Archivo .pfx/.p12 en base64."
+                            },
+                            "password": {
+                                "type": "string",
+                                "description": "Contraseña del PFX."
+                            }
+                        },
+                        "required": [
+                            "pfx_base64",
+                            "password"
+                        ]
+                    },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "cert_pem": {
+                                "type": "string",
+                                "description": "Certificado en PEM."
+                            },
+                            "key_pem": {
+                                "type": "string",
+                                "description": "Llave privada RSA en PEM."
+                            },
+                            "key_password": {
+                                "type": "string",
+                                "description": "Contraseña de la llave, si la tiene."
+                            }
+                        },
+                        "required": [
+                            "cert_pem",
+                            "key_pem"
+                        ]
+                    }
+                ]
+            },
+            "Me": {
+                "type": "object",
+                "properties": {
+                    "ruc": {
+                        "type": "string",
+                        "description": "RUC de la empresa."
+                    },
+                    "razon_social": {
+                        "type": "string",
+                        "description": "Razón social."
+                    },
+                    "entorno": {
+                        "type": "string",
+                        "enum": [
+                            "prueba",
+                            "produccion"
+                        ]
+                    },
+                    "api_key": {
+                        "type": "string",
+                        "description": "Prefijo de la llave usada.",
+                        "example": "sk_test_4891..."
+                    },
+                    "credenciales_sol": {
+                        "type": "boolean",
+                        "description": "Si hay clave SOL registrada."
+                    },
+                    "credenciales_gre": {
+                        "type": "boolean",
+                        "description": "Si hay credenciales GRE registradas."
+                    },
+                    "certificado": {
+                        "allOf": [
+                            {
+                                "$ref": "#/components/schemas/Certificado"
+                            }
+                        ],
+                        "nullable": true
+                    }
+                }
+            },
+            "Listado": {
+                "type": "object",
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/Documento"
+                        }
+                    },
+                    "total": {
+                        "type": "integer",
+                        "description": "Total que cumple el filtro."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Máximo por página."
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Desde."
+                    }
+                },
+                "required": [
+                    "items",
+                    "total",
+                    "limit",
+                    "offset"
+                ]
+            },
+            "SerieRequest": {
+                "type": "object",
+                "properties": {
+                    "tipo": {
+                        "type": "string",
+                        "enum": [
+                            "01",
+                            "03",
+                            "07",
+                            "08",
+                            "20",
+                            "09"
+                        ],
+                        "description": "Tipo de documento: `01` factura, `03` boleta, `07` nota de crédito, `08` nota de débito, `20` retención, `09` guía."
+                    },
+                    "serie": {
+                        "type": "string",
+                        "description": "4 caracteres; el prefijo depende del tipo: factura `F`, boleta `B`, notas `F` o `B`, retención `R`, guía `T`.",
+                        "example": "B001"
+                    },
+                    "modo": {
+                        "type": "string",
+                        "enum": [
+                            "cliente",
+                            "api"
+                        ],
+                        "default": "cliente",
+                        "description": "Quién numera: `cliente` (su sistema comercial; la API aprende el último número) o `api` (la API asigna)."
+                    },
+                    "ultimo_numero": {
+                        "type": "integer",
+                        "description": "Último número que ya usó en esa serie, para continuar desde allí. **Solo puede subir, nunca bajar** (evita repetir números).",
+                        "minimum": 0,
+                        "maximum": 99999999
+                    }
+                },
+                "required": [
+                    "tipo",
+                    "serie"
+                ]
+            },
+            "Serie": {
+                "type": "object",
+                "properties": {
+                    "tipo": {
+                        "type": "string",
+                        "description": "Tipo de documento."
+                    },
+                    "serie": {
+                        "type": "string",
+                        "description": "Serie."
+                    },
+                    "modo": {
+                        "type": "string",
+                        "enum": [
+                            "cliente",
+                            "api"
+                        ]
+                    },
+                    "entorno": {
+                        "type": "string",
+                        "enum": [
+                            "prueba",
+                            "produccion"
+                        ]
+                    },
+                    "ultimo_numero": {
+                        "type": "integer",
+                        "description": "Mayor número usado o reservado hasta ahora."
+                    },
+                    "siguiente_numero": {
+                        "type": "string",
+                        "description": "El próximo número (8 dígitos). En modo `cliente` es una sugerencia para su sistema.",
+                        "example": "00000151"
+                    },
+                    "reservas_abiertas": {
+                        "type": "integer",
+                        "description": "Números reservados que todavía no se enviaron a SUNAT."
+                    }
+                }
+            },
+            "ListadoSeries": {
+                "type": "object",
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/Serie"
+                        }
+                    }
+                },
+                "required": [
+                    "items"
+                ]
+            },
+            "ReservaRequest": {
+                "type": "object",
+                "properties": {
+                    "tipo": {
+                        "type": "string",
+                        "description": "Tipo de documento."
+                    },
+                    "serie": {
+                        "type": "string",
+                        "description": "Serie (debe estar en modo `api`)."
+                    },
+                    "cantidad": {
+                        "type": "integer",
+                        "description": "Cuántos números reservar (1 a 100; por defecto 1).",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 1
+                    }
+                },
+                "required": [
+                    "tipo",
+                    "serie"
+                ]
+            },
+            "Reserva": {
+                "type": "object",
+                "properties": {
+                    "tipo": {
+                        "type": "string",
+                        "description": "Tipo."
+                    },
+                    "serie": {
+                        "type": "string",
+                        "description": "Serie."
+                    },
+                    "numeros": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "example": [
+                            "00000004",
+                            "00000005"
+                        ]
+                    },
+                    "aviso": {
+                        "type": "string",
+                        "description": "Recordatorio de uso."
+                    }
+                },
+                "required": [
+                    "tipo",
+                    "serie",
+                    "numeros"
+                ]
+            }
+        },
+        "responses": {
+            "R400": {
+                "description": "Petición mal formada: cuerpo vacío (`cuerpo_vacio`), JSON inválido (`json_invalido`) o `Idempotency-Key` inválida (`idempotency_key_invalida`).",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/Error"
+                        },
+                        "example": {
+                            "ok": false,
+                            "error": {
+                                "code": "json_invalido",
+                                "message": "El cuerpo debe ser un objeto JSON valido: Syntax error"
+                            },
+                            "request_id": "req_a8122150f2caeaa0"
+                        }
+                    }
+                }
+            },
+            "R401": {
+                "description": "Falta la API key o es inválida/revocada (`no_autenticado`).",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/Error"
+                        },
+                        "example": {
+                            "ok": false,
+                            "error": {
+                                "code": "no_autenticado",
+                                "message": "Falta la API key o es invalida. Envie: Authorization: Bearer sk_test_..."
+                            },
+                            "request_id": "req_a8122150f2caeaa0"
+                        }
+                    }
+                }
+            },
+            "R403": {
+                "description": "La empresa está desactivada (`empresa_inactiva`).",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/Error"
+                        },
+                        "example": {
+                            "ok": false,
+                            "error": {
+                                "code": "empresa_inactiva",
+                                "message": "La empresa asociada a esta API key esta desactivada."
+                            },
+                            "request_id": "req_a8122150f2caeaa0"
+                        }
+                    }
+                }
+            },
+            "R404": {
+                "description": "No existe la ruta o el recurso (`ruta_no_encontrada`, `no_encontrado`, `certificado_no_registrado`, `serie_no_registrada`).",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/Error"
+                        },
+                        "example": {
+                            "ok": false,
+                            "error": {
+                                "code": "no_encontrado",
+                                "message": "Documento no encontrado."
+                            },
+                            "request_id": "req_a8122150f2caeaa0"
+                        }
+                    }
+                }
+            },
+            "R405": {
+                "description": "Método HTTP no permitido en esa ruta (`metodo_no_permitido`). La cabecera `Allow` indica los permitidos.",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/Error"
+                        },
+                        "example": {
+                            "ok": false,
+                            "error": {
+                                "code": "metodo_no_permitido",
+                                "message": "Use GET en /v1/me"
+                            },
+                            "request_id": "req_a8122150f2caeaa0"
+                        }
+                    }
+                }
+            },
+            "R409": {
+                "description": "Conflicto: `documento_duplicado` (ya existe ese tipo/serie/número aceptado o pendiente) `idempotencia_conflicto` (la `Idempotency-Key` ya se usó con otro cuerpo), `peticion_en_curso` / `documento_en_proceso` (ya se está procesando), `numero_no_reservado` (serie en modo `api`: el número no fue reservado), `serie_no_automatica` (reservar en una serie que numera su sistema) o `serie_agotada`.",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/Error"
+                        },
+                        "example": {
+                            "ok": false,
+                            "error": {
+                                "code": "documento_duplicado",
+                                "message": "Ya existe 01 F001-94455099 con estado aceptado."
+                            },
+                            "request_id": "req_a8122150f2caeaa0"
+                        }
+                    }
+                }
+            },
+            "R413": {
+                "description": "El cuerpo supera 3 MB (`cuerpo_muy_grande`).",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/Error"
+                        },
+                        "example": {
+                            "ok": false,
+                            "error": {
+                                "code": "cuerpo_muy_grande",
+                                "message": "El cuerpo supera 3 MB."
+                            },
+                            "request_id": "req_a8122150f2caeaa0"
+                        }
+                    }
+                }
+            },
+            "R422": {
+                "description": "Los datos no son válidos (`validacion`, con `details` por campo) o falta un dato de numeración (`numero_requerido`, `idempotency_key_requerida`: la numeración automática exige `Idempotency-Key`) o hay un problema con el certificado (`certificado_requerido`, `certificado_vencido`, `certificado_invalido`, `llave_invalida`, `llave_no_corresponde`, `certificado_ruc_no_coincide`, `certificado_no_vigente`). **No se envió nada a SUNAT.**",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/Error"
+                        },
+                        "example": {
+                            "ok": false,
+                            "error": {
+                                "code": "validacion",
+                                "message": "Los datos enviados no son validos.",
+                                "details": [
+                                    {
+                                        "campo": "venta.serie",
+                                        "mensaje": "la serie de una factura son 4 caracteres y empieza con F (ej. F001)"
+                                    },
+                                    {
+                                        "campo": "items.0.codigo_sunat",
+                                        "mensaje": "es obligatorio: codigo de producto SUNAT de 8 digitos (catalogo 25, ej. 50202201)"
+                                    }
+                                ]
+                            },
+                            "request_id": "req_a8122150f2caeaa0"
+                        }
+                    }
+                }
+            },
+            "R500": {
+                "description": "Error interno (`error_interno`). Cite el `request_id`.",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/Error"
+                        },
+                        "example": {
+                            "ok": false,
+                            "error": {
+                                "code": "error_interno",
+                                "message": "Error interno del servidor. Cite el request_id al pedir soporte."
+                            },
+                            "request_id": "req_a8122150f2caeaa0"
+                        }
+                    }
+                }
+            },
+            "R504": {
+                "description": "SUNAT no respondió a tiempo (`tiempo_agotado`). No se perdió nada: reintente en unos minutos (con la misma `Idempotency-Key` si es una emisión).",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/Error"
+                        },
+                        "example": {
+                            "ok": false,
+                            "error": {
+                                "code": "tiempo_agotado",
+                                "message": "SUNAT no respondio a tiempo. Intente de nuevo en unos minutos."
+                            },
+                            "request_id": "req_a8122150f2caeaa0"
+                        }
+                    }
+                }
+            },
+            "R502": {
+                "description": "El motor o SUNAT no respondieron (`motor_no_disponible`, `motor_error`). Reintente con la misma `Idempotency-Key`.",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/Error"
+                        },
+                        "example": {
+                            "ok": false,
+                            "error": {
+                                "code": "motor_no_disponible",
+                                "message": "El motor de facturacion no respondio. Intente nuevamente."
+                            },
+                            "request_id": "req_a8122150f2caeaa0"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

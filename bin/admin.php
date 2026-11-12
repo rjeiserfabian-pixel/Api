@@ -13,6 +13,11 @@
  *   php bin/admin.php key:revocar --id=3
  *   php bin/admin.php cert:subir --ruc=20123456789 --entorno=test|live (--pfx=archivo.pfx --pass=clave | --cert=server.pem --key=server_key.pem [--pass=clave_llave])
  *   php bin/admin.php cert:ver [--ruc=20123456789]
+ *   php bin/admin.php serie:crear --ruc=20123456789 --entorno=test|live --tipo=03 --serie=B001 [--modo=cliente|api] [--ultimo=150]
+ *   php bin/admin.php serie:listar [--ruc=20123456789] [--entorno=test|live]
+ *   php bin/admin.php db:copiar --dsn="pgsql:host=127.0.0.1;port=5432;dbname=api_sunat" --user=... --pass=...
+ *        Copia TODOS los datos de la base actual (la de DB_DSN o SQLite) a otra base VACIA (ej. PostgreSQL).
+ *        No modifica el origen. Despues, cambie DB_DSN/DB_USER/DB_PASS en .env para usar la nueva base.
  */
 if (PHP_SAPI !== 'cli') {
     http_response_code(404);
@@ -20,7 +25,7 @@ if (PHP_SAPI !== 'cli') {
 }
 $raiz = dirname(__DIR__);
 require_once $raiz . '/libraries/env.php';
-foreach (array('Respuesta', 'Db', 'Crypto', 'Auth') as $c) {
+foreach (array('Respuesta', 'Db', 'Crypto', 'Auth', 'Series') as $c) {
     require_once $raiz . '/v1/src/' . $c . '.php';
 }
 date_default_timezone_set('America/Lima');
@@ -211,6 +216,107 @@ switch ($cmd) {
         echo 'Certificado guardado (' . $o['entorno'] . '): ' . $info['sujeto'] . PHP_EOL . '  vigente hasta ' . $info['valido_hasta'] . ($info['ruc_coincide'] ? '' : '  [AVISO: no contiene el RUC; solo sirve para pruebas]') . PHP_EOL;
         break;
 
+    case 'db:copiar':
+        exigir($o, array('dsn'));
+        $tablas = array('empresas', 'api_keys', 'certificados', 'series', 'documentos');
+        $origen = Db::pdo();
+        $motorOrigen = $origen->getAttribute(PDO::ATTR_DRIVER_NAME);
+        Db::asegurarEsquema();
+        $conteoOrigen = array();
+        foreach ($tablas as $t) {
+            $conteoOrigen[$t] = (int) $origen->query('SELECT COUNT(*) FROM ' . $t)->fetchColumn();
+        }
+        try {
+            $destino = Db::conectar($o['dsn'], isset($o['user']) ? $o['user'] : null, isset($o['pass']) ? $o['pass'] : null);
+        } catch (PDOException $e) {
+            salir('No se pudo conectar al destino: ' . $e->getMessage());
+        }
+        $motorDestino = $destino->getAttribute(PDO::ATTR_DRIVER_NAME);
+        Db::crearEsquema(); // crea las tablas en el destino
+        foreach ($tablas as $t) {
+            if ((int) $destino->query('SELECT COUNT(*) FROM ' . $t)->fetchColumn() > 0) {
+                salir("El destino ya tiene datos en la tabla $t. Use una base de datos vacia (nada se copio).");
+            }
+        }
+        echo "Copiando de $motorOrigen a $motorDestino...\n";
+        $destino->beginTransaction();
+        try {
+            foreach ($tablas as $t) {
+                $filas = $origen->query('SELECT * FROM ' . $t . ' ORDER BY id');
+                $ins = null;
+                $n = 0;
+                while ($f = $filas->fetch(PDO::FETCH_ASSOC)) {
+                    if ($ins === null) {
+                        $cols = array_keys($f);
+                        $ins = $destino->prepare('INSERT INTO ' . $t . ' (' . implode(', ', $cols) . ') VALUES (' . implode(', ', array_fill(0, count($cols), '?')) . ')');
+                    }
+                    $ins->execute(array_values($f));
+                    $n++;
+                }
+                echo sprintf("  %-14s %d filas\n", $t, $n);
+            }
+            if ($motorDestino === 'pgsql') { // las secuencias deben continuar despues del mayor id copiado
+                foreach ($tablas as $t) {
+                    $destino->query("SELECT setval(pg_get_serial_sequence('$t', 'id'), COALESCE((SELECT MAX(id) FROM $t), 1), (SELECT COUNT(*) > 0 FROM $t))");
+                }
+            }
+            $destino->commit();
+        } catch (Exception $e) {
+            if ($destino->inTransaction()) {
+                $destino->rollBack();
+            }
+            salir('Fallo la copia (se deshizo todo, el destino quedo vacio): ' . $e->getMessage());
+        }
+        $bien = true;
+        foreach ($tablas as $t) {
+            $nd = (int) $destino->query('SELECT COUNT(*) FROM ' . $t)->fetchColumn();
+            if ($nd !== $conteoOrigen[$t]) {
+                $bien = false;
+                echo "  DIFERENCIA en $t: origen {$conteoOrigen[$t]}, destino $nd\n";
+            }
+        }
+        if (!$bien) {
+            salir('La verificacion de conteos fallo.');
+        }
+        echo "Copia verificada: los conteos coinciden en las 5 tablas." . PHP_EOL
+            . "Para usar la nueva base, ponga en .env:  DB_DSN=" . $o['dsn'] . "  DB_USER=...  DB_PASS=..." . PHP_EOL;
+        break;
+
+    case 'serie:crear':
+        exigir($o, array('ruc', 'entorno', 'tipo', 'serie'));
+        if (!in_array($o['entorno'], array('test', 'live'), true)) {
+            salir('--entorno debe ser test o live.');
+        }
+        $e = Db::uno('SELECT * FROM empresas WHERE ruc = ?', array($o['ruc']));
+        if (!$e) {
+            salir('No existe esa empresa.');
+        }
+        Db::asegurarEsquema();
+        try {
+            list($vista, $creada) = Series::guardar(array('empresa' => $e, 'key' => array('entorno' => $o['entorno'])), $o['tipo'], strtoupper($o['serie']),
+                isset($o['modo']) ? $o['modo'] : null, isset($o['ultimo']) ? (ctype_digit($o['ultimo']) ? (int) $o['ultimo'] : -1) : null);
+        } catch (ApiError $err) {
+            salir('Serie rechazada: ' . $err->getMessage() . ($err->detalles ? ' (' . $err->detalles[0]['mensaje'] . ')' : ''));
+        }
+        echo ($creada ? 'Serie creada: ' : 'Serie actualizada: ') . $vista['tipo'] . ' ' . $vista['serie'] . '  modo=' . $vista['modo'] . '  ultimo=' . $vista['ultimo_numero'] . '  siguiente=' . $vista['siguiente_numero'] . PHP_EOL;
+        break;
+
+    case 'serie:listar':
+        Db::asegurarEsquema();
+        $sql = 'SELECT s.*, e.ruc FROM series s JOIN empresas e ON e.id = s.empresa_id WHERE 1=1' . (isset($o['ruc']) ? ' AND e.ruc = ?' : '') . (isset($o['entorno']) ? ' AND s.entorno = ?' : '') . ' ORDER BY e.ruc, s.entorno, s.tipo, s.serie';
+        $par = array();
+        if (isset($o['ruc'])) {
+            $par[] = $o['ruc'];
+        }
+        if (isset($o['entorno'])) {
+            $par[] = $o['entorno'];
+        }
+        foreach (Db::consultar($sql, $par) as $s) {
+            $v = Series::ver($s);
+            printf("%s  %-4s  %-3s %-9s modo=%-7s ultimo=%-9s siguiente=%-9s reservas=%d\n", $s['ruc'], $s['entorno'], $s['tipo'], $s['serie'], $s['modo'], $s['ultimo_numero'], $v['siguiente_numero'], $v['reservas_abiertas']);
+        }
+        break;
+
     case 'cert:ver':
         require_once $raiz . '/v1/src/Certificados.php';
         $sql = 'SELECT e.ruc, e.id FROM empresas e' . (isset($o['ruc']) ? ' WHERE e.ruc = ?' : '') . ' ORDER BY e.id';
@@ -224,6 +330,6 @@ switch ($cmd) {
         break;
 
     default:
-        echo "Comandos: init | empresa:crear | empresa:actualizar | empresa:listar | key:crear | key:listar | key:revocar | cert:subir | cert:ver" . PHP_EOL
+        echo "Comandos: init | empresa:crear | empresa:actualizar | empresa:listar | key:crear | key:listar | key:revocar | cert:subir | cert:ver | serie:crear | serie:listar | db:copiar" . PHP_EOL
             . "Vea el encabezado de bin/admin.php para las opciones." . PHP_EOL;
 }

@@ -46,7 +46,7 @@ class Motor
     }
 
     /** Llama a un script del motor. Devuelve array('http' => int, 'json' => array|null, 'raw' => string). */
-    public static function llamar($script, array $payload)
+    public static function llamar($script, array $payload, $timeout = 100)
     {
         $ch = curl_init(self::urlInterna() . '/' . $script);
         $cab = array('Content-Type: application/json');
@@ -60,12 +60,17 @@ class Motor
             CURLOPT_HTTPHEADER => $cab,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_CONNECTTIMEOUT => 5,
-            CURLOPT_TIMEOUT => 100,
+            CURLOPT_TIMEOUT => (int) $timeout,
         ));
         $raw = curl_exec($ch);
         $http = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $err = curl_error($ch);
+        $errno = curl_errno($ch);
         curl_close($ch);
+        if ($raw === false && $errno === 28) {
+            error_log('[v1] tiempo agotado esperando al motor/SUNAT (' . $script . ', ' . $timeout . ' s)');
+            throw new ApiError(504, 'tiempo_agotado', 'SUNAT no respondio a tiempo. Intente de nuevo en unos minutos.');
+        }
         if ($raw === false) {
             error_log('[v1] motor sin respuesta (' . $script . '): ' . $err);
             throw new ApiError(502, 'motor_no_disponible', 'El motor de facturacion no respondio. Intente nuevamente.');

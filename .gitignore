@@ -25,3 +25,6 @@ ws_sunat/respuesta_oauth.txt
 # Base de datos y datos locales de la API v1
 storage/*
 !storage/.htaccess
+
+# Respuestas temporales del motor (si SUNAT devuelve un error HTML)
+ws_sunat/C[0-9]*.xml

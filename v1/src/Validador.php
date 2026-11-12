@@ -103,7 +103,7 @@ class Validador
     }
 
     /** Reglas de un comprobante 01/03/07/08. */
-    public static function comprobante(array $b)
+    public static function comprobante(array $b, $numeroOpcional = false)
     {
         $v = new self();
         $tipo = (string) self::obtener($b, 'venta.tipo_documento_codigo');
@@ -116,7 +116,9 @@ class Validador
         } else {
             $v->patron($b, 'venta.serie', '/^[FB][A-Z0-9]{3}$/', 'la serie de una nota son 4 caracteres y empieza con F o B (ej. FC01)');
         }
-        $v->patron($b, 'venta.numero', '/^\d{1,8}$/', 'solo digitos, maximo 8');
+        if (!$numeroOpcional) {
+            $v->patron($b, 'venta.numero', '/^\d{1,8}$/', 'solo digitos, maximo 8');
+        }
         $v->fecha($b, 'venta.fecha_emision');
         $v->patron($b, 'venta.hora_emision', '/^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/', 'formato HH:MM:SS');
         $v->enLista($b, 'venta.moneda_id', array(1, 2, 3));

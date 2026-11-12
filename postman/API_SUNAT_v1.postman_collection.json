@@ -1,0 +1,1756 @@
+{
+    "info": {
+        "name": "API SUNAT v1",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+        "description": "API de facturacion electronica SUNAT.\n\n1. Pegue su API key de PRUEBA (sk_test_...) en la variable de coleccion api_key (no la guarde en el repositorio).\n2. Ajuste base_url si no es local.\n3. Ejecute primero '00 Iniciar tanda de numeros' y luego el resto (o la carpeta completa con Runner).\n\nCon sk_test todo va al beta de SUNAT (sin efectos reales). NO use una llave sk_live con esta coleccion: emitiria documentos reales.\n\nDocumentacion completa: docs/openapi.json"
+    },
+    "auth": {
+        "type": "bearer",
+        "bearer": [
+            {
+                "key": "token",
+                "value": "{{api_key}}",
+                "type": "string"
+            }
+        ]
+    },
+    "event": [
+        {
+            "listen": "prerequest",
+            "script": {
+                "type": "text/javascript",
+                "exec": [
+                    "function lima() { return new Date(Date.now() - 5 * 3600 * 1000); }",
+                    "function iniciar() {",
+                    "  const d = lima(), iso = d.toISOString(), n = Math.floor(Date.now() / 1000) % 100000000, s = (k, v) => pm.collectionVariables.set(k, String(v));",
+                    "  s('fecha', iso.slice(0, 10)); s('fecha_compacta', iso.slice(0, 10).replace(/-/g, ''));",
+                    "  s('fecha_venc', new Date(d.getTime() + 30 * 86400000).toISOString().slice(0, 10));",
+                    "  s('numero', n); s('numero_credito', n + 1); s('numero_boleta', n + 2); s('numero_nota', n + 3); s('numero_retencion', n + 4); s('numero_guia', n + 5);",
+                    "  s('correlativo', Math.floor(Date.now() / 1000) % 99999); s('idem', 'postman-' + n); s('lote', n);",
+                    "  const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let sa = 'B'; for (let i = 0; i < 3; i++) { sa += abc[Math.floor(Math.random() * abc.length)]; }",
+                    "  s('serie_auto', sa); s('idem_auto', 'postman-auto-' + n);",
+                    "}",
+                    "if (pm.info.requestName.indexOf('00 ') === 0 || !pm.collectionVariables.get('lote')) { iniciar(); }"
+                ]
+            }
+        }
+    ],
+    "item": [
+        {
+            "name": "1. Sistema",
+            "item": [
+                {
+                    "name": "00 Iniciar tanda de numeros (ejecutar primero)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                                    "pm.test(\"ok = true\", () => pm.expect(j.ok).to.eql(true));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/health",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "health"
+                            ]
+                        },
+                        "description": "Genera fecha, numeros y correlativos nuevos para esta tanda. Ejecute esta peticion al empezar para no repetir numeros de comprobantes.",
+                        "auth": {
+                            "type": "noauth"
+                        }
+                    }
+                },
+                {
+                    "name": "GET /me",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                                    "pm.test(\"ok = true\", () => pm.expect(j.ok).to.eql(true));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/me",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "me"
+                            ]
+                        },
+                        "description": "Empresa, entorno (debe decir \"prueba\" con llave sk_test) y certificado."
+                    }
+                },
+                {
+                    "name": "GET /health (sin autenticacion)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                                    "pm.test(\"ok = true\", () => pm.expect(j.ok).to.eql(true));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/health",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "health"
+                            ]
+                        },
+                        "description": "",
+                        "auth": {
+                            "type": "noauth"
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "2. Comprobantes",
+            "item": [
+                {
+                    "name": "Factura (con Idempotency-Key)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                                    "pm.test(\"ok = true\", () => pm.expect(j.ok).to.eql(true));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));",
+                                    "pm.test(\"estado = aceptado\", () => pm.expect(j.data.estado).to.eql(\"aceptado\"));",
+                                    "if (j.ok && j.data && j.data.id) { pm.collectionVariables.set(\"doc_id\", j.data.id); }"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            },
+                            {
+                                "key": "Idempotency-Key",
+                                "value": "{{idem}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/comprobantes",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "comprobantes"
+                            ]
+                        },
+                        "description": "Factura al contado. La Idempotency-Key permite reintentar sin duplicar.",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"cliente\": {\n        \"codigo_tipo_entidad\": \"6\",\n        \"numero_documento\": \"20987654321\",\n        \"razon_social_nombres\": \"CLIENTE S.A.C.\",\n        \"cliente_direccion\": \"AV. CLIENTE 456\"\n    },\n    \"venta\": {\n        \"tipo_documento_codigo\": \"01\",\n        \"serie\": \"F001\",\n        \"numero\": \"{{numero}}\",\n        \"fecha_emision\": \"{{fecha}}\",\n        \"hora_emision\": \"10:00:00\",\n        \"fecha_vencimiento\": \"{{fecha_venc}}\",\n        \"moneda_id\": 1,\n        \"forma_pago_id\": 1,\n        \"total_gravada\": 100,\n        \"total_igv\": 18,\n        \"orden_compra\": \"OC-001\",\n        \"nota\": \"Observaciones opcionales\"\n    },\n    \"items\": [\n        {\n            \"codigo_producto\": \"PROD001\",\n            \"producto\": \"PRODUCTO DE EJEMPLO\",\n            \"codigo_sunat\": \"50202201\",\n            \"cantidad\": 2,\n            \"codigo_unidad\": \"NIU\",\n            \"precio_base\": 50,\n            \"tipo_igv_codigo\": \"10\"\n        }\n    ]\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "Factura - repetir la MISMA peticion (replay)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                                    "pm.test(\"ok = true\", () => pm.expect(j.ok).to.eql(true));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));",
+                                    "pm.test(\"estado = aceptado\", () => pm.expect(j.data.estado).to.eql(\"aceptado\"));",
+                                    "pm.test(\"cabecera Idempotent-Replay\", () => pm.expect(pm.response.headers.get(\"Idempotent-Replay\")).to.eql(\"true\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            },
+                            {
+                                "key": "Idempotency-Key",
+                                "value": "{{idem}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/comprobantes",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "comprobantes"
+                            ]
+                        },
+                        "description": "Mismo cuerpo y misma Idempotency-Key: devuelve el resultado guardado sin volver a enviar a SUNAT.",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"cliente\": {\n        \"codigo_tipo_entidad\": \"6\",\n        \"numero_documento\": \"20987654321\",\n        \"razon_social_nombres\": \"CLIENTE S.A.C.\",\n        \"cliente_direccion\": \"AV. CLIENTE 456\"\n    },\n    \"venta\": {\n        \"tipo_documento_codigo\": \"01\",\n        \"serie\": \"F001\",\n        \"numero\": \"{{numero}}\",\n        \"fecha_emision\": \"{{fecha}}\",\n        \"hora_emision\": \"10:00:00\",\n        \"fecha_vencimiento\": \"{{fecha_venc}}\",\n        \"moneda_id\": 1,\n        \"forma_pago_id\": 1,\n        \"total_gravada\": 100,\n        \"total_igv\": 18,\n        \"orden_compra\": \"OC-001\",\n        \"nota\": \"Observaciones opcionales\"\n    },\n    \"items\": [\n        {\n            \"codigo_producto\": \"PROD001\",\n            \"producto\": \"PRODUCTO DE EJEMPLO\",\n            \"codigo_sunat\": \"50202201\",\n            \"cantidad\": 2,\n            \"codigo_unidad\": \"NIU\",\n            \"precio_base\": 50,\n            \"tipo_igv_codigo\": \"10\"\n        }\n    ]\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "Factura - mismo documento sin llave (409)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 409\", () => pm.response.to.have.status(409));",
+                                    "pm.test(\"ok = false\", () => pm.expect(j.ok).to.eql(false));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));",
+                                    "pm.test(\"error.code = documento_duplicado\", () => pm.expect(j.error.code).to.eql(\"documento_duplicado\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/comprobantes",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "comprobantes"
+                            ]
+                        },
+                        "description": "",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"cliente\": {\n        \"codigo_tipo_entidad\": \"6\",\n        \"numero_documento\": \"20987654321\",\n        \"razon_social_nombres\": \"CLIENTE S.A.C.\",\n        \"cliente_direccion\": \"AV. CLIENTE 456\"\n    },\n    \"venta\": {\n        \"tipo_documento_codigo\": \"01\",\n        \"serie\": \"F001\",\n        \"numero\": \"{{numero}}\",\n        \"fecha_emision\": \"{{fecha}}\",\n        \"hora_emision\": \"10:00:00\",\n        \"fecha_vencimiento\": \"{{fecha_venc}}\",\n        \"moneda_id\": 1,\n        \"forma_pago_id\": 1,\n        \"total_gravada\": 100,\n        \"total_igv\": 18,\n        \"orden_compra\": \"OC-001\",\n        \"nota\": \"Observaciones opcionales\"\n    },\n    \"items\": [\n        {\n            \"codigo_producto\": \"PROD001\",\n            \"producto\": \"PRODUCTO DE EJEMPLO\",\n            \"codigo_sunat\": \"50202201\",\n            \"cantidad\": 2,\n            \"codigo_unidad\": \"NIU\",\n            \"precio_base\": 50,\n            \"tipo_igv_codigo\": \"10\"\n        }\n    ]\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "Factura al credito con cuotas",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                                    "pm.test(\"ok = true\", () => pm.expect(j.ok).to.eql(true));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));",
+                                    "pm.test(\"estado = aceptado\", () => pm.expect(j.data.estado).to.eql(\"aceptado\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/comprobantes",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "comprobantes"
+                            ]
+                        },
+                        "description": "",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"cliente\": {\n        \"codigo_tipo_entidad\": \"6\",\n        \"numero_documento\": \"20987654321\",\n        \"razon_social_nombres\": \"CLIENTE S.A.C.\",\n        \"cliente_direccion\": \"AV. CLIENTE 456\"\n    },\n    \"venta\": {\n        \"tipo_documento_codigo\": \"01\",\n        \"serie\": \"F001\",\n        \"numero\": \"{{numero_credito}}\",\n        \"fecha_emision\": \"{{fecha}}\",\n        \"hora_emision\": \"10:00:00\",\n        \"fecha_vencimiento\": \"{{fecha_venc}}\",\n        \"moneda_id\": 1,\n        \"forma_pago_id\": 2,\n        \"total_gravada\": 100,\n        \"total_igv\": 18\n    },\n    \"cuotas\": [\n        {\n            \"monto\": 118,\n            \"fecha_cuota\": \"{{fecha_venc}}\"\n        }\n    ],\n    \"items\": [\n        {\n            \"codigo_producto\": \"PROD001\",\n            \"producto\": \"PRODUCTO DE EJEMPLO\",\n            \"codigo_sunat\": \"50202201\",\n            \"cantidad\": 2,\n            \"codigo_unidad\": \"NIU\",\n            \"precio_base\": 50,\n            \"tipo_igv_codigo\": \"10\"\n        }\n    ]\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "Boleta a DNI",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                                    "pm.test(\"ok = true\", () => pm.expect(j.ok).to.eql(true));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));",
+                                    "pm.test(\"estado = aceptado\", () => pm.expect(j.data.estado).to.eql(\"aceptado\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/comprobantes",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "comprobantes"
+                            ]
+                        },
+                        "description": "",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"cliente\": {\n        \"codigo_tipo_entidad\": \"1\",\n        \"numero_documento\": \"12345678\",\n        \"razon_social_nombres\": \"JUAN PEREZ GARCIA\",\n        \"cliente_direccion\": \"AV. CLIENTE 456\"\n    },\n    \"venta\": {\n        \"tipo_documento_codigo\": \"03\",\n        \"serie\": \"B001\",\n        \"numero\": \"{{numero_boleta}}\",\n        \"fecha_emision\": \"{{fecha}}\",\n        \"hora_emision\": \"10:00:00\",\n        \"moneda_id\": 1,\n        \"forma_pago_id\": 1,\n        \"total_gravada\": 84.75,\n        \"total_igv\": 15.25\n    },\n    \"items\": [\n        {\n            \"codigo_producto\": \"PROD001\",\n            \"producto\": \"PRODUCTO DE EJEMPLO\",\n            \"codigo_sunat\": \"50202201\",\n            \"cantidad\": 1,\n            \"codigo_unidad\": \"NIU\",\n            \"precio_base\": 84.75,\n            \"tipo_igv_codigo\": \"10\"\n        }\n    ]\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "Nota de credito",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                                    "pm.test(\"ok = true\", () => pm.expect(j.ok).to.eql(true));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));",
+                                    "pm.test(\"estado = aceptado\", () => pm.expect(j.data.estado).to.eql(\"aceptado\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/comprobantes",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "comprobantes"
+                            ]
+                        },
+                        "description": "Modifica la factura emitida arriba (relacionado_numero).",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"cliente\": {\n        \"codigo_tipo_entidad\": \"6\",\n        \"numero_documento\": \"20987654321\",\n        \"razon_social_nombres\": \"CLIENTE S.A.C.\",\n        \"cliente_direccion\": \"AV. CLIENTE 456\"\n    },\n    \"venta\": {\n        \"tipo_documento_codigo\": \"07\",\n        \"serie\": \"FC01\",\n        \"numero\": \"{{numero_nota}}\",\n        \"fecha_emision\": \"{{fecha}}\",\n        \"hora_emision\": \"10:00:00\",\n        \"moneda_id\": 1,\n        \"forma_pago_id\": 1,\n        \"total_gravada\": 50,\n        \"total_igv\": 9,\n        \"relacionado_serie\": \"F001\",\n        \"relacionado_numero\": \"{{numero}}\",\n        \"relacionado_tipo_documento\": \"01\",\n        \"relacionado_motivo_codigo\": \"01\"\n    },\n    \"items\": [\n        {\n            \"codigo_producto\": \"PROD001\",\n            \"producto\": \"DEVOLUCION PARCIAL\",\n            \"codigo_sunat\": \"50202201\",\n            \"cantidad\": 1,\n            \"codigo_unidad\": \"NIU\",\n            \"precio_base\": 50,\n            \"tipo_igv_codigo\": \"10\"\n        }\n    ]\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "Nota de debito",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                                    "pm.test(\"ok = true\", () => pm.expect(j.ok).to.eql(true));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));",
+                                    "pm.test(\"estado = aceptado\", () => pm.expect(j.data.estado).to.eql(\"aceptado\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/comprobantes",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "comprobantes"
+                            ]
+                        },
+                        "description": "",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"cliente\": {\n        \"codigo_tipo_entidad\": \"6\",\n        \"numero_documento\": \"20987654321\",\n        \"razon_social_nombres\": \"CLIENTE S.A.C.\",\n        \"cliente_direccion\": \"AV. CLIENTE 456\"\n    },\n    \"venta\": {\n        \"tipo_documento_codigo\": \"08\",\n        \"serie\": \"FD01\",\n        \"numero\": \"{{numero_nota}}\",\n        \"fecha_emision\": \"{{fecha}}\",\n        \"hora_emision\": \"10:00:00\",\n        \"moneda_id\": 1,\n        \"forma_pago_id\": 1,\n        \"total_gravada\": 20,\n        \"total_igv\": 3.6,\n        \"relacionado_serie\": \"F001\",\n        \"relacionado_numero\": \"{{numero}}\",\n        \"relacionado_tipo_documento\": \"01\",\n        \"relacionado_motivo_codigo\": \"01\"\n    },\n    \"items\": [\n        {\n            \"codigo_producto\": \"SERV001\",\n            \"producto\": \"PENALIDAD POR INCUMPLIMIENTO\",\n            \"codigo_sunat\": \"84111506\",\n            \"cantidad\": 1,\n            \"codigo_unidad\": \"NIU\",\n            \"precio_base\": 20,\n            \"tipo_igv_codigo\": \"10\"\n        }\n    ]\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "Factura con ?incluir=archivos (XML y CDR en base64)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                                    "pm.test(\"ok = true\", () => pm.expect(j.ok).to.eql(true));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));",
+                                    "pm.test(\"estado = aceptado\", () => pm.expect(j.data.estado).to.eql(\"aceptado\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/comprobantes?incluir=archivos",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "comprobantes"
+                            ],
+                            "query": [
+                                {
+                                    "key": "incluir",
+                                    "value": "archivos"
+                                }
+                            ]
+                        },
+                        "description": "Usa la serie F002 para no chocar con la factura anterior.",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"cliente\": {\n        \"codigo_tipo_entidad\": \"6\",\n        \"numero_documento\": \"20987654321\",\n        \"razon_social_nombres\": \"CLIENTE S.A.C.\",\n        \"cliente_direccion\": \"AV. CLIENTE 456\"\n    },\n    \"venta\": {\n        \"tipo_documento_codigo\": \"01\",\n        \"serie\": \"F002\",\n        \"numero\": \"{{numero_nota}}\",\n        \"fecha_emision\": \"{{fecha}}\",\n        \"hora_emision\": \"10:00:00\",\n        \"fecha_vencimiento\": \"{{fecha_venc}}\",\n        \"moneda_id\": 1,\n        \"forma_pago_id\": 1,\n        \"total_gravada\": 100,\n        \"total_igv\": 18,\n        \"orden_compra\": \"OC-001\",\n        \"nota\": \"Observaciones opcionales\"\n    },\n    \"items\": [\n        {\n            \"codigo_producto\": \"PROD001\",\n            \"producto\": \"PRODUCTO DE EJEMPLO\",\n            \"codigo_sunat\": \"50202201\",\n            \"cantidad\": 2,\n            \"codigo_unidad\": \"NIU\",\n            \"precio_base\": 50,\n            \"tipo_igv_codigo\": \"10\"\n        }\n    ]\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "2b. Series y numeración",
+            "item": [
+                {
+                    "name": "Registrar una serie en modo api (la API numera)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 200 o 201\", () => pm.expect([200,201]).to.include(pm.response.code));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/series",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "series"
+                            ]
+                        },
+                        "description": "Crea una serie con nombre aleatorio para esta tanda. Con modo \"api\" la API asigna los numeros; con \"cliente\" su sistema comercial numera y la API aprende el ultimo.",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"tipo\": \"03\",\n    \"serie\": \"{{serie_auto}}\",\n    \"modo\": \"api\",\n    \"ultimo_numero\": 0\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "Listar series y siguiente número",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                                    "pm.test(\"ok = true\", () => pm.expect(j.ok).to.eql(true));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/series",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "series"
+                            ]
+                        },
+                        "description": "Muestra ultimo_numero, siguiente_numero y reservas_abiertas de cada serie de este entorno."
+                    }
+                },
+                {
+                    "name": "Boleta con número automático",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                                    "pm.test(\"ok = true\", () => pm.expect(j.ok).to.eql(true));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));",
+                                    "pm.test(\"estado = aceptado\", () => pm.expect(j.data.estado).to.eql(\"aceptado\"));",
+                                    "pm.test(\"numero asignado por la API\", () => pm.expect(j.data.numero).to.be.a(\"string\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            },
+                            {
+                                "key": "Idempotency-Key",
+                                "value": "{{idem_auto}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/comprobantes",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "comprobantes"
+                            ]
+                        },
+                        "description": "Sin venta.numero: la API asigna el siguiente. Exige Idempotency-Key.",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"cliente\": {\n        \"codigo_tipo_entidad\": \"1\",\n        \"numero_documento\": \"12345678\",\n        \"razon_social_nombres\": \"JUAN PEREZ GARCIA\",\n        \"cliente_direccion\": \"AV. CLIENTE 456\"\n    },\n    \"venta\": {\n        \"tipo_documento_codigo\": \"03\",\n        \"serie\": \"{{serie_auto}}\",\n        \"fecha_emision\": \"{{fecha}}\",\n        \"hora_emision\": \"10:00:00\",\n        \"moneda_id\": 1,\n        \"forma_pago_id\": 1,\n        \"total_gravada\": 84.75,\n        \"total_igv\": 15.25\n    },\n    \"items\": [\n        {\n            \"codigo_producto\": \"PROD001\",\n            \"producto\": \"PRODUCTO DE EJEMPLO\",\n            \"codigo_sunat\": \"50202201\",\n            \"cantidad\": 1,\n            \"codigo_unidad\": \"NIU\",\n            \"precio_base\": 84.75,\n            \"tipo_igv_codigo\": \"10\"\n        }\n    ]\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "Repetir la misma boleta (reintento): mismo número",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                                    "pm.test(\"ok = true\", () => pm.expect(j.ok).to.eql(true));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));",
+                                    "pm.test(\"estado = aceptado\", () => pm.expect(j.data.estado).to.eql(\"aceptado\"));",
+                                    "pm.test(\"cabecera Idempotent-Replay\", () => pm.expect(pm.response.headers.get(\"Idempotent-Replay\")).to.eql(\"true\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            },
+                            {
+                                "key": "Idempotency-Key",
+                                "value": "{{idem_auto}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/comprobantes",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "comprobantes"
+                            ]
+                        },
+                        "description": "Mismo cuerpo y misma Idempotency-Key: devuelve el mismo documento y numero, sin consumir otro.",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"cliente\": {\n        \"codigo_tipo_entidad\": \"1\",\n        \"numero_documento\": \"12345678\",\n        \"razon_social_nombres\": \"JUAN PEREZ GARCIA\",\n        \"cliente_direccion\": \"AV. CLIENTE 456\"\n    },\n    \"venta\": {\n        \"tipo_documento_codigo\": \"03\",\n        \"serie\": \"{{serie_auto}}\",\n        \"fecha_emision\": \"{{fecha}}\",\n        \"hora_emision\": \"10:00:00\",\n        \"moneda_id\": 1,\n        \"forma_pago_id\": 1,\n        \"total_gravada\": 84.75,\n        \"total_igv\": 15.25\n    },\n    \"items\": [\n        {\n            \"codigo_producto\": \"PROD001\",\n            \"producto\": \"PRODUCTO DE EJEMPLO\",\n            \"codigo_sunat\": \"50202201\",\n            \"cantidad\": 1,\n            \"codigo_unidad\": \"NIU\",\n            \"precio_base\": 84.75,\n            \"tipo_igv_codigo\": \"10\"\n        }\n    ]\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "Reservar 2 números (para enviarlos después)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                                    "pm.test(\"ok = true\", () => pm.expect(j.ok).to.eql(true));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));",
+                                    "pm.test(\"2 numeros reservados\", () => pm.expect(j.data.numeros.length).to.eql(2));",
+                                    "pm.collectionVariables.set(\"reserva_numero\", j.data.numeros[0]);"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/series/reservar",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "series",
+                                "reservar"
+                            ]
+                        },
+                        "description": "Escenario: su sistema comercial entrega la boleta ahora (con este numero) y la envia a SUNAT despues. El numero reservado se guarda en {{reserva_numero}}.",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"tipo\": \"03\",\n    \"serie\": \"{{serie_auto}}\",\n    \"cantidad\": 2\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "Consultar el número reservado (aún no enviado)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                                    "pm.test(\"ok = true\", () => pm.expect(j.ok).to.eql(true));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));",
+                                    "pm.test(\"estado = reservado\", () => pm.expect(j.data.estado).to.eql(\"reservado\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/comprobantes/03/{{serie_auto}}/{{reserva_numero}}",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "comprobantes",
+                                "03",
+                                "{{serie_auto}}",
+                                "{{reserva_numero}}"
+                            ]
+                        },
+                        "description": ""
+                    }
+                },
+                {
+                    "name": "Enviar a SUNAT la boleta con el número reservado",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                                    "pm.test(\"ok = true\", () => pm.expect(j.ok).to.eql(true));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));",
+                                    "pm.test(\"estado = aceptado\", () => pm.expect(j.data.estado).to.eql(\"aceptado\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/comprobantes",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "comprobantes"
+                            ]
+                        },
+                        "description": "Mismo numero que se reservo: se completa esa reserva (no se crea otro documento).",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"cliente\": {\n        \"codigo_tipo_entidad\": \"1\",\n        \"numero_documento\": \"12345678\",\n        \"razon_social_nombres\": \"JUAN PEREZ GARCIA\",\n        \"cliente_direccion\": \"AV. CLIENTE 456\"\n    },\n    \"venta\": {\n        \"tipo_documento_codigo\": \"03\",\n        \"serie\": \"{{serie_auto}}\",\n        \"fecha_emision\": \"{{fecha}}\",\n        \"hora_emision\": \"10:00:00\",\n        \"moneda_id\": 1,\n        \"forma_pago_id\": 1,\n        \"total_gravada\": 84.75,\n        \"total_igv\": 15.25,\n        \"numero\": \"{{reserva_numero}}\"\n    },\n    \"items\": [\n        {\n            \"codigo_producto\": \"PROD001\",\n            \"producto\": \"PRODUCTO DE EJEMPLO\",\n            \"codigo_sunat\": \"50202201\",\n            \"cantidad\": 1,\n            \"codigo_unidad\": \"NIU\",\n            \"precio_base\": 84.75,\n            \"tipo_igv_codigo\": \"10\"\n        }\n    ]\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "Consultar por serie y número (ya aceptada)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                                    "pm.test(\"ok = true\", () => pm.expect(j.ok).to.eql(true));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));",
+                                    "pm.test(\"estado = aceptado\", () => pm.expect(j.data.estado).to.eql(\"aceptado\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/comprobantes/03/{{serie_auto}}/{{reserva_numero}}",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "comprobantes",
+                                "03",
+                                "{{serie_auto}}",
+                                "{{reserva_numero}}"
+                            ]
+                        },
+                        "description": ""
+                    }
+                },
+                {
+                    "name": "Número que no se reservó en una serie \"api\" (409)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 409\", () => pm.response.to.have.status(409));",
+                                    "pm.test(\"ok = false\", () => pm.expect(j.ok).to.eql(false));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));",
+                                    "pm.test(\"error.code = numero_no_reservado\", () => pm.expect(j.error.code).to.eql(\"numero_no_reservado\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/comprobantes",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "comprobantes"
+                            ]
+                        },
+                        "description": "",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"cliente\": {\n        \"codigo_tipo_entidad\": \"1\",\n        \"numero_documento\": \"12345678\",\n        \"razon_social_nombres\": \"JUAN PEREZ GARCIA\",\n        \"cliente_direccion\": \"AV. CLIENTE 456\"\n    },\n    \"venta\": {\n        \"tipo_documento_codigo\": \"03\",\n        \"serie\": \"{{serie_auto}}\",\n        \"fecha_emision\": \"{{fecha}}\",\n        \"hora_emision\": \"10:00:00\",\n        \"moneda_id\": 1,\n        \"forma_pago_id\": 1,\n        \"total_gravada\": 84.75,\n        \"total_igv\": 15.25,\n        \"numero\": \"99999999\"\n    },\n    \"items\": [\n        {\n            \"codigo_producto\": \"PROD001\",\n            \"producto\": \"PRODUCTO DE EJEMPLO\",\n            \"codigo_sunat\": \"50202201\",\n            \"cantidad\": 1,\n            \"codigo_unidad\": \"NIU\",\n            \"precio_base\": 84.75,\n            \"tipo_igv_codigo\": \"10\"\n        }\n    ]\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "3. Retencion",
+            "item": [
+                {
+                    "name": "Comprobante de retencion",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                                    "pm.test(\"ok = true\", () => pm.expect(j.ok).to.eql(true));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));",
+                                    "pm.test(\"estado = aceptado\", () => pm.expect(j.data.estado).to.eql(\"aceptado\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/retenciones",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "retenciones"
+                            ]
+                        },
+                        "description": "",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"proveedor\": {\n        \"ruc\": \"20987654321\",\n        \"razon_social\": \"PROVEEDOR S.A.C.\"\n    },\n    \"retencion\": {\n        \"serie\": \"R001\",\n        \"numero\": \"{{numero_retencion}}\",\n        \"fecha_de_emision\": \"{{fecha}}\",\n        \"codigo\": \"01\",\n        \"porcentaje\": 3,\n        \"nota\": \"Retencion segun regimen\",\n        \"total_retenido\": 35.4,\n        \"total_facturado_menos_retenido\": 1144.6\n    },\n    \"documento_relacionados\": [\n        {\n            \"relacionado_tipo_documento\": \"01\",\n            \"relacionado_serie\": \"F001\",\n            \"relacionado_numero\": \"00000001\",\n            \"relacionado_fecha_emision\": \"{{fecha}}\",\n            \"relacionado_monto_total\": 1180,\n            \"pago_numero\": \"1\",\n            \"pago_monto\": 1180,\n            \"pago_fecha\": \"{{fecha}}\",\n            \"retencion_monto\": 35.4,\n            \"retencion_fecha\": \"{{fecha}}\",\n            \"moneda\": \"1\",\n            \"moneda_tipo_cambio\": 1,\n            \"moneda_fecha_cambio\": \"{{fecha}}\"\n        }\n    ]\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "4. Resumen, baja y reversion",
+            "item": [
+                {
+                    "name": "Resumen diario de boletas",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                                    "pm.test(\"ok = true\", () => pm.expect(j.ok).to.eql(true));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));",
+                                    "pm.test(\"estado = pendiente\", () => pm.expect(j.data.estado).to.eql(\"pendiente\"));",
+                                    "if (j.ok && j.data && j.data.ticket) { pm.collectionVariables.set(\"ticket\", j.data.ticket); }"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/resumenes",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "resumenes"
+                            ]
+                        },
+                        "description": "Devuelve un ticket (se guarda en {{ticket}}).",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"resumen\": {\n        \"numero\": \"{{fecha_compacta}}\",\n        \"correlativo\": \"{{correlativo}}\",\n        \"fecha_documentos\": \"{{fecha}}\",\n        \"fecha_resumen\": \"{{fecha}}\"\n    },\n    \"comprobantes\": [\n        {\n            \"tipo_documento\": \"03\",\n            \"serie\": \"B001\",\n            \"numero\": \"{{numero_boleta}}\",\n            \"cliente_numero_documento\": \"12345678\",\n            \"cliente_tipo_documento\": \"1\",\n            \"total_a_pagar\": 100,\n            \"total_gravada\": 84.75,\n            \"total_igv\": 15.25,\n            \"total_exonerada\": \"\",\n            \"total_inafecta\": \"\",\n            \"total_gratuita\": \"\",\n            \"status\": \"1\"\n        }\n    ]\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "Baja de una factura",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                                    "pm.test(\"ok = true\", () => pm.expect(j.ok).to.eql(true));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));",
+                                    "pm.test(\"estado = pendiente\", () => pm.expect(j.data.estado).to.eql(\"pendiente\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/bajas",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "bajas"
+                            ]
+                        },
+                        "description": "Solo facturas y notas. Las boletas se anulan con resumen diario (status 3).",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"anulacion\": {\n        \"correlativo_diario\": \"{{correlativo}}\",\n        \"fecha_comprobante\": \"{{fecha}}\",\n        \"tipo_documento_codigo\": \"01\",\n        \"serie\": \"F001\",\n        \"numero\": \"{{numero_credito}}\"\n    }\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "Reversion",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                                    "pm.test(\"ok = true\", () => pm.expect(j.ok).to.eql(true));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));",
+                                    "pm.test(\"estado = pendiente\", () => pm.expect(j.data.estado).to.eql(\"pendiente\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/reversiones",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "reversiones"
+                            ]
+                        },
+                        "description": "",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"reversion\": {\n        \"correlativo_diario\": \"{{correlativo}}\",\n        \"fecha_resumen\": \"{{fecha}}\",\n        \"fecha_documentos\": \"{{fecha}}\"\n    },\n    \"documento_relacionados\": [\n        {\n            \"tipo_documento_codigo\": \"20\",\n            \"serie\": \"R001\",\n            \"numero\": \"{{numero_retencion}}\",\n            \"descripcion\": \"ANULACION POR ERROR\"\n        }\n    ]\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "5. Guia de remision",
+            "item": [
+                {
+                    "name": "Guia de remision remitente",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                                    "pm.test(\"ok = true\", () => pm.expect(j.ok).to.eql(true));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));",
+                                    "pm.test(\"estado = simulado\", () => pm.expect(j.data.estado).to.eql(\"simulado\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/guias",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "guias"
+                            ]
+                        },
+                        "description": "Con llave sk_test NO se envia a SUNAT (simulado). Con sk_live se emite de verdad. Con sk_live requiere credenciales GRE de la empresa.",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"destinatario\": {\n        \"codigo_tipo_entidad\": \"1\",\n        \"numero_documento\": \"12345678\",\n        \"razon_social_nombres\": \"JUAN PEREZ GARCIA\"\n    },\n    \"guia\": {\n        \"serie\": \"T001\",\n        \"numero\": \"{{numero_guia}}\",\n        \"fecha_emision\": \"{{fecha}}\",\n        \"hora_emision\": \"07:00:00\",\n        \"fecha_entrega_bienes_transportista\": \"{{fecha}}\",\n        \"fecha_inicio_traslado\": \"{{fecha}}\",\n        \"motivo_traslado_codigo\": \"01\",\n        \"peso_total\": 5,\n        \"unidad_peso\": \"KGM\",\n        \"cantidad_bultos\": 1,\n        \"direccion_partida\": \"AV. LIMA 123\",\n        \"ubigeo_partida\": \"150101\",\n        \"direccion_llegada\": \"AV. CLIENTE 456\",\n        \"ubigeo_llegada\": \"150101\",\n        \"transporte_publico\": false,\n        \"observacion\": \"\"\n    },\n    \"vehiculos\": [\n        {\n            \"placa\": \"ABC123\",\n            \"principal\": true\n        }\n    ],\n    \"conductores\": [\n        {\n            \"tipo_documento\": \"1\",\n            \"numero_documento\": \"12345678\",\n            \"nombres\": \"JUAN\",\n            \"apellidos\": \"PEREZ GARCIA\",\n            \"licencia\": \"Q12345678\",\n            \"principal\": true\n        }\n    ],\n    \"items\": [\n        {\n            \"codigo_producto\": \"cc1\",\n            \"producto\": \"PRODUCTO DE EJEMPLO\",\n            \"codigo_sunat\": \"43211503\",\n            \"cantidad\": 1,\n            \"codigo_unidad\": \"NIU\"\n        }\n    ],\n    \"documentos_relacionados\": [\n        {\n            \"tipo_documento\": \"03\",\n            \"serie\": \"B001\",\n            \"numero\": \"{{numero_boleta}}\",\n            \"ruc_emisor\": \"20000000001\"\n        }\n    ]\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "6. Consultas de ticket",
+            "item": [
+                {
+                    "name": "Ticket de resumen",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 200 o 504\", () => pm.expect([200,504]).to.include(pm.response.code));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/tickets",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "tickets"
+                            ]
+                        },
+                        "description": "Usa el ticket guardado en {{ticket}}. Si SUNAT no responde en 25 s devuelve 504 tiempo_agotado: reintente.",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"tipo\": \"resumen\",\n    \"ticket\": \"{{ticket}}\",\n    \"correlativo\": \"{{correlativo}}\",\n    \"fecha_ticket\": \"{{fecha}}\"\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "Ticket de baja",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 200 o 504\", () => pm.expect([200,504]).to.include(pm.response.code));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/tickets",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "tickets"
+                            ]
+                        },
+                        "description": "",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"tipo\": \"baja\",\n    \"ticket\": \"{{ticket}}\"\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "Ticket de guia",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 200 o 422 o 502 o 504\", () => pm.expect([200,422,502,504]).to.include(pm.response.code));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/tickets",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "tickets"
+                            ]
+                        },
+                        "description": "Pegue en {{ticket_guia}} el ticket de una guia enviada con llave live.",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"tipo\": \"guia\",\n    \"ticket\": \"{{ticket_guia}}\"\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "7. Historial",
+            "item": [
+                {
+                    "name": "Listar documentos",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                                    "pm.test(\"ok = true\", () => pm.expect(j.ok).to.eql(true));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/documentos?limit=10",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "documentos"
+                            ],
+                            "query": [
+                                {
+                                    "key": "limit",
+                                    "value": "10"
+                                }
+                            ]
+                        },
+                        "description": ""
+                    }
+                },
+                {
+                    "name": "Listar solo facturas aceptadas",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                                    "pm.test(\"ok = true\", () => pm.expect(j.ok).to.eql(true));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/documentos?tipo=01&estado=aceptado&limit=5",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "documentos"
+                            ],
+                            "query": [
+                                {
+                                    "key": "tipo",
+                                    "value": "01"
+                                },
+                                {
+                                    "key": "estado",
+                                    "value": "aceptado"
+                                },
+                                {
+                                    "key": "limit",
+                                    "value": "5"
+                                }
+                            ]
+                        },
+                        "description": ""
+                    }
+                },
+                {
+                    "name": "Detalle del documento ({{doc_id}})",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                                    "pm.test(\"ok = true\", () => pm.expect(j.ok).to.eql(true));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/documentos/{{doc_id}}",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "documentos",
+                                "{{doc_id}}"
+                            ]
+                        },
+                        "description": "Use el id devuelto al emitir (se guarda solo tras emitir la factura)."
+                    }
+                }
+            ]
+        },
+        {
+            "name": "8. Certificado digital",
+            "item": [
+                {
+                    "name": "Estado del certificado",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 200 o 404\", () => pm.expect([200,404]).to.include(pm.response.code));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/certificado",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "certificado"
+                            ]
+                        },
+                        "description": ""
+                    }
+                },
+                {
+                    "name": "Registrar certificado (PFX)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 200 o 422\", () => pm.expect([200,422]).to.include(pm.response.code));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/certificado",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "certificado"
+                            ]
+                        },
+                        "description": "Ponga el PFX en base64 en {{pfx_base64}} y su contrasena en el cuerpo. Con sk_test registra el de pruebas; con sk_live el de produccion.",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"pfx_base64\": \"{{pfx_base64}}\",\n    \"password\": \"contrasena-del-pfx\"\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "9. Errores esperados",
+            "item": [
+                {
+                    "name": "Sin API key (401)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 401\", () => pm.response.to.have.status(401));",
+                                    "pm.test(\"ok = false\", () => pm.expect(j.ok).to.eql(false));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));",
+                                    "pm.test(\"error.code = no_autenticado\", () => pm.expect(j.error.code).to.eql(\"no_autenticado\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/me",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "me"
+                            ]
+                        },
+                        "description": "",
+                        "auth": {
+                            "type": "noauth"
+                        }
+                    }
+                },
+                {
+                    "name": "Datos invalidos (422)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 422\", () => pm.response.to.have.status(422));",
+                                    "pm.test(\"ok = false\", () => pm.expect(j.ok).to.eql(false));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));",
+                                    "pm.test(\"error.code = validacion\", () => pm.expect(j.error.code).to.eql(\"validacion\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/comprobantes",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "comprobantes"
+                            ]
+                        },
+                        "description": "No llega a SUNAT: details lista cada campo con su correccion.",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"venta\": {\n        \"tipo_documento_codigo\": \"01\",\n        \"serie\": \"B001\",\n        \"numero\": \"abc\"\n    }\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "name": "Ruta inexistente (404)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 404\", () => pm.response.to.have.status(404));",
+                                    "pm.test(\"ok = false\", () => pm.expect(j.ok).to.eql(false));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));",
+                                    "pm.test(\"error.code = ruta_no_encontrada\", () => pm.expect(j.error.code).to.eql(\"ruta_no_encontrada\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                            "raw": "{{base_url}}/nada",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "nada"
+                            ]
+                        },
+                        "description": ""
+                    }
+                },
+                {
+                    "name": "Baja de una boleta (422)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "const j = pm.response.json();",
+                                    "pm.test(\"HTTP 422\", () => pm.response.to.have.status(422));",
+                                    "pm.test(\"ok = false\", () => pm.expect(j.ok).to.eql(false));",
+                                    "pm.test(\"trae request_id\", () => pm.expect(j.request_id).to.be.a(\"string\"));",
+                                    "pm.test(\"error.code = validacion\", () => pm.expect(j.error.code).to.eql(\"validacion\"));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/bajas",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "bajas"
+                            ]
+                        },
+                        "description": "",
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"anulacion\": {\n        \"correlativo_diario\": \"1\",\n        \"fecha_comprobante\": \"{{fecha}}\",\n        \"tipo_documento_codigo\": \"03\",\n        \"serie\": \"B001\",\n        \"numero\": \"1\"\n    }\n}",
+                            "options": {
+                                "raw": {
+                                    "language": "json"
+                                }
+                            }
+                        }
+                    }
+                }
+            ]
+        }
+    ],
+    "variable": [
+        {
+            "key": "base_url",
+            "value": "http://localhost/API_SUNAT/v1"
+        },
+        {
+            "key": "api_key",
+            "value": ""
+        },
+        {
+            "key": "lote",
+            "value": ""
+        },
+        {
+            "key": "fecha",
+            "value": ""
+        },
+        {
+            "key": "fecha_venc",
+            "value": ""
+        },
+        {
+            "key": "fecha_compacta",
+            "value": ""
+        },
+        {
+            "key": "numero",
+            "value": ""
+        },
+        {
+            "key": "numero_credito",
+            "value": ""
+        },
+        {
+            "key": "numero_boleta",
+            "value": ""
+        },
+        {
+            "key": "numero_nota",
+            "value": ""
+        },
+        {
+            "key": "numero_retencion",
+            "value": ""
+        },
+        {
+            "key": "numero_guia",
+            "value": ""
+        },
+        {
+            "key": "correlativo",
+            "value": ""
+        },
+        {
+            "key": "idem",
+            "value": ""
+        },
+        {
+            "key": "serie_auto",
+            "value": ""
+        },
+        {
+            "key": "idem_auto",
+            "value": ""
+        },
+        {
+            "key": "reserva_numero",
+            "value": ""
+        },
+        {
+            "key": "ticket",
+            "value": ""
+        },
+        {
+            "key": "ticket_guia",
+            "value": ""
+        },
+        {
+            "key": "pfx_base64",
+            "value": ""
+        },
+        {
+            "key": "doc_id",
+            "value": ""
+        }
+    ]
+}

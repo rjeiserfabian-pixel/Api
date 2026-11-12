@@ -5,6 +5,9 @@
  *   GET  /v1/health                    estado del servicio (sin autenticacion)
  *   GET  /v1/me                        empresa y entorno de la API key
  *   POST /v1/comprobantes              factura (01), boleta (03), nota de credito (07), nota de debito (08)
+ *   GET  /v1/series, POST /v1/series   series y correlativos (numeracion sincronizada con el sistema comercial)
+ *   POST /v1/series/reservar           reserva numeros para usarlos antes de enviar a SUNAT
+ *   GET  /v1/comprobantes/{tipo}/{serie}/{numero}   consulta por serie y numero
  *   POST /v1/resumenes                 resumen diario de boletas
  *   POST /v1/bajas                     comunicacion de baja
  *   POST /v1/reversiones               reversion
@@ -16,10 +19,11 @@
  */
 require_once __DIR__ . '/../libraries/env.php';
 require_once __DIR__ . '/../libraries/errores.php';
-foreach (array('Respuesta', 'Db', 'Crypto', 'Auth', 'Validador', 'Motor', 'Documentos') as $c) {
+foreach (array('Respuesta', 'Db', 'Crypto', 'Auth', 'Validador', 'Motor', 'Series', 'Documentos') as $c) {
     require_once __DIR__ . '/src/' . $c . '.php';
 }
 date_default_timezone_set('America/Lima');
+@set_time_limit(130); // la emision puede esperar a SUNAT; el limite por defecto de PHP (30 s) cortaba la respuesta
 
 set_exception_handler(function ($e) {
     if ($e instanceof ApiError) {
@@ -48,12 +52,14 @@ if ($ruta === '/health') {
 $permitidos = array(
     '/me' => 'GET', '/comprobantes' => 'POST', '/resumenes' => 'POST', '/bajas' => 'POST',
     '/reversiones' => 'POST', '/retenciones' => 'POST', '/guias' => 'POST', '/tickets' => 'POST', '/documentos' => 'GET', '/certificado' => 'GET|POST',
+    '/series' => 'GET|POST', '/series/reservar' => 'POST',
 );
 $esDetalle = preg_match('#^/documentos/(doc_[a-f0-9]{20})$#', $ruta, $m);
-if (!$esDetalle && !isset($permitidos[$ruta])) {
+$esBusqueda = preg_match('#^/comprobantes/(01|03|07|08|20|09)/([A-Za-z0-9]{4})/(\d{1,8})$#', $ruta, $mb);
+if (!$esDetalle && !$esBusqueda && !isset($permitidos[$ruta])) {
     Respuesta::error(404, 'ruta_no_encontrada', "No existe $metodo /v1$ruta");
 }
-$esperado = $esDetalle ? 'GET' : $permitidos[$ruta];
+$esperado = ($esDetalle || $esBusqueda) ? 'GET' : $permitidos[$ruta];
 if (!in_array($metodo, explode('|', $esperado), true)) {
     $lista = str_replace('|', ', ', $esperado);
     Respuesta::error(405, 'metodo_no_permitido', "Use $lista en /v1$ruta", null, array('Allow' => $lista));
@@ -61,6 +67,7 @@ if (!in_array($metodo, explode('|', $esperado), true)) {
 
 $ctx = Auth::autenticar();
 $empresa = $ctx['empresa'];
+Db::asegurarEsquema(); // tras actualizar el codigo, crea lo que falte (tablas o columnas nuevas)
 
 if ($ruta === '/me') {
     Respuesta::ok(array(
@@ -81,6 +88,12 @@ if ($ruta === '/certificado' && $metodo === 'GET') {
 if ($esDetalle) {
     Respuesta::ok(Documentos::obtener($ctx, $m[1]));
 }
+if ($esBusqueda) {
+    Respuesta::ok(Documentos::buscar($ctx, $mb[1], strtoupper($mb[2]), $mb[3]));
+}
+if ($ruta === '/series' && $metodo === 'GET') {
+    Respuesta::ok(array('items' => Series::listar($ctx)));
+}
 if ($ruta === '/documentos') {
     Respuesta::ok(Documentos::listar($ctx));
 }
@@ -90,6 +103,34 @@ $b = Documentos::cuerpo();
 unset($b['empresa']); // las credenciales y datos del emisor salen de la base, no del cliente
 
 switch ($ruta) {
+    case '/series':
+        $v = new Validador();
+        $v->requerido($b, 'tipo');
+        $v->requerido($b, 'serie');
+        $v->lanzarSiHayErrores();
+        $modo = isset($b['modo']) ? $b['modo'] : null;
+        $ultimo = array_key_exists('ultimo_numero', $b) ? $b['ultimo_numero'] : null;
+        list($vista, $creada) = Series::guardar($ctx, (string) $b['tipo'], strtoupper((string) $b['serie']), $modo, $ultimo);
+        Respuesta::ok($vista, $creada ? 201 : 200);
+
+    case '/series/reservar':
+        $v = new Validador();
+        $v->requerido($b, 'tipo');
+        $v->requerido($b, 'serie');
+        $cant = isset($b['cantidad']) ? $b['cantidad'] : 1;
+        if (!is_int($cant) || $cant < 1 || $cant > 100) {
+            $v->error('cantidad', 'entero entre 1 y 100');
+        }
+        $v->lanzarSiHayErrores();
+        Series::validarSerie((string) $b['tipo'], strtoupper((string) $b['serie']));
+        $filas = Series::reservar($ctx, (string) $b['tipo'], strtoupper((string) $b['serie']), $cant);
+        $numeros = array();
+        foreach ($filas as $f) {
+            $numeros[] = $f['numero'];
+        }
+        Respuesta::ok(array('tipo' => (string) $b['tipo'], 'serie' => strtoupper((string) $b['serie']), 'numeros' => $numeros,
+            'aviso' => 'Reservados. Use cada numero al enviar el comprobante (POST /comprobantes con ese venta.numero); su estado es "reservado" hasta entonces.'), 201);
+
     case '/certificado':
         // Opcion A: {"pfx_base64": "...", "password": "..."}   Opcion B: {"cert_pem": "...", "key_pem": "...", "key_password": "..."}
         $v = new Validador();
@@ -122,7 +163,11 @@ switch ($ruta) {
         Respuesta::ok($d); // 200: el certificado se reemplaza por el nuevo
 
     case '/comprobantes':
-        Validador::comprobante($b);
+        $auto = !isset($b['venta']['numero']) || $b['venta']['numero'] === '';
+        Validador::comprobante($b, $auto);
+        if ($auto) {
+            Series::exigirAutomatica($ctx, (string) $b['venta']['tipo_documento_codigo'], (string) $b['venta']['serie']);
+        }
         foreach (array('total_exonerada', 'total_inafecta', 'total_gratuita', 'total_gratuita_igv', 'total_bolsa', 'fecha_vencimiento') as $c) {
             if (!isset($b['venta'][$c])) {
                 $b['venta'][$c] = null;
@@ -133,13 +178,18 @@ switch ($ruta) {
                 $b[$c] = array();
             }
         }
-        $d = Documentos::emitir($ctx, 'post.php', $b, $b['venta']['tipo_documento_codigo'], $b['venta']['serie'], $b['venta']['numero']);
+        $d = Documentos::emitir($ctx, 'post.php', $b, $b['venta']['tipo_documento_codigo'], $b['venta']['serie'], $auto ? null : $b['venta']['numero'],
+            function (array &$cu, $num) {
+                $cu['venta']['numero'] = $num;
+            });
         break;
 
     case '/resumenes':
         $v = new Validador();
-        foreach (array('resumen.numero', 'resumen.correlativo') as $c) {
-            $v->patron($b, $c, '/^\d{1,8}$/', 'solo digitos');
+        $auto = !isset($b['resumen']['correlativo']) || $b['resumen']['correlativo'] === '';
+        $v->patron($b, 'resumen.numero', '/^\d{8}$/', 'fecha del resumen AAAAMMDD');
+        if (!$auto) {
+            $v->patron($b, 'resumen.correlativo', '/^\d{1,5}$/', 'solo digitos, maximo 5');
         }
         $v->fecha($b, 'resumen.fecha_documentos');
         $v->fecha($b, 'resumen.fecha_resumen');
@@ -159,12 +209,21 @@ switch ($ruta) {
             }
         }
         $v->lanzarSiHayErrores();
-        $d = Documentos::emitir($ctx, 'resumen.php', $b, 'RC', $b['resumen']['numero'], $b['resumen']['correlativo']);
+        if ($auto) {
+            Series::asegurarDiaria($ctx, 'RC', $b['resumen']['numero']);
+        }
+        $d = Documentos::emitir($ctx, 'resumen.php', $b, 'RC', $b['resumen']['numero'], $auto ? null : $b['resumen']['correlativo'],
+            function (array &$cu, $num) {
+                $cu['resumen']['correlativo'] = $num;
+            });
         break;
 
     case '/bajas':
         $v = new Validador();
-        $v->patron($b, 'anulacion.correlativo_diario', '/^\d{1,5}$/', 'solo digitos');
+        $auto = !isset($b['anulacion']['correlativo_diario']) || $b['anulacion']['correlativo_diario'] === '';
+        if (!$auto) {
+            $v->patron($b, 'anulacion.correlativo_diario', '/^\d{1,5}$/', 'solo digitos, maximo 5');
+        }
         $v->fecha($b, 'anulacion.fecha_comprobante');
         if ((string) Validador::obtener($b, 'anulacion.tipo_documento_codigo') === '03') {
             $v->error('anulacion.tipo_documento_codigo', 'las boletas no se anulan con baja: envielas en un resumen diario con status 3');
@@ -174,12 +233,22 @@ switch ($ruta) {
         $v->patron($b, 'anulacion.serie', '/^[FB][A-Z0-9]{3}$/', 'serie del comprobante (ej. F001)');
         $v->patron($b, 'anulacion.numero', '/^\d{1,8}$/', 'solo digitos');
         $v->lanzarSiHayErrores();
-        $d = Documentos::emitir($ctx, 'baja.php', $b, 'RA', $b['anulacion']['serie'], $b['anulacion']['numero'] . '#' . $b['anulacion']['correlativo_diario']);
+        $hoy = date('Ymd'); // el motor nombra la baja con la fecha de hoy
+        if ($auto) {
+            Series::asegurarDiaria($ctx, 'RA', $hoy);
+        }
+        $d = Documentos::emitir($ctx, 'baja.php', $b, 'RA', $hoy, $auto ? null : $b['anulacion']['correlativo_diario'],
+            function (array &$cu, $num) {
+                $cu['anulacion']['correlativo_diario'] = $num;
+            });
         break;
 
     case '/reversiones':
         $v = new Validador();
-        $v->patron($b, 'reversion.correlativo_diario', '/^\d{1,5}$/', 'solo digitos');
+        $auto = !isset($b['reversion']['correlativo_diario']) || $b['reversion']['correlativo_diario'] === '';
+        if (!$auto) {
+            $v->patron($b, 'reversion.correlativo_diario', '/^\d{1,5}$/', 'solo digitos, maximo 5');
+        }
         $v->fecha($b, 'reversion.fecha_resumen');
         $v->fecha($b, 'reversion.fecha_documentos');
         $dr = Validador::obtener($b, 'documento_relacionados');
@@ -195,7 +264,14 @@ switch ($ruta) {
             }
         }
         $v->lanzarSiHayErrores();
-        $d = Documentos::emitir($ctx, 'post_reversion.php', $b, 'RR', $b['reversion']['fecha_resumen'], $b['reversion']['correlativo_diario']);
+        $ymd = str_replace('-', '', $b['reversion']['fecha_resumen']);
+        if ($auto) {
+            Series::asegurarDiaria($ctx, 'RR', $ymd);
+        }
+        $d = Documentos::emitir($ctx, 'post_reversion.php', $b, 'RR', $ymd, $auto ? null : $b['reversion']['correlativo_diario'],
+            function (array &$cu, $num) {
+                $cu['reversion']['correlativo_diario'] = $num;
+            });
         break;
 
     case '/retenciones':
@@ -203,7 +279,10 @@ switch ($ruta) {
         $v->patron($b, 'proveedor.ruc', '/^\d{11}$/', 'RUC de 11 digitos');
         $v->requerido($b, 'proveedor.razon_social');
         $v->patron($b, 'retencion.serie', '/^R[A-Z0-9]{3}$/', 'la serie empieza con R (ej. R001)');
-        $v->patron($b, 'retencion.numero', '/^\d{1,8}$/', 'solo digitos');
+        $auto = !isset($b['retencion']['numero']) || $b['retencion']['numero'] === '';
+        if (!$auto) {
+            $v->patron($b, 'retencion.numero', '/^\d{1,8}$/', 'solo digitos');
+        }
         $v->fecha($b, 'retencion.fecha_de_emision');
         $v->enLista($b, 'retencion.codigo', array('01', '02'));
         $v->numero($b, 'retencion.total_retenido', 0);
@@ -213,14 +292,23 @@ switch ($ruta) {
             $v->error('documento_relacionados', 'debe enviar al menos un documento relacionado');
         }
         $v->lanzarSiHayErrores();
+        if ($auto) {
+            Series::exigirAutomatica($ctx, '20', (string) $b['retencion']['serie']);
+        }
         $b['emisor'] = Motor::empresa($empresa, $ctx['key']['entorno']);
-        $d = Documentos::emitir($ctx, 'post_retencion.php', $b, '20', $b['retencion']['serie'], $b['retencion']['numero']);
+        $d = Documentos::emitir($ctx, 'post_retencion.php', $b, '20', $b['retencion']['serie'], $auto ? null : $b['retencion']['numero'],
+            function (array &$cu, $num) {
+                $cu['retencion']['numero'] = $num;
+            });
         break;
 
     case '/guias':
         $v = new Validador();
         $v->patron($b, 'guia.serie', '/^[TV][A-Z0-9]{3}$/', 'la serie empieza con T (ej. T001)');
-        $v->patron($b, 'guia.numero', '/^\d{1,8}$/', 'solo digitos');
+        $auto = !isset($b['guia']['numero']) || $b['guia']['numero'] === '';
+        if (!$auto) {
+            $v->patron($b, 'guia.numero', '/^\d{1,8}$/', 'solo digitos');
+        }
         $v->fecha($b, 'guia.fecha_emision');
         $v->fecha($b, 'guia.fecha_inicio_traslado');
         $v->patron($b, 'guia.hora_emision', '/^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/', 'formato HH:MM:SS');
@@ -253,7 +341,13 @@ switch ($ruta) {
                 $b[$c] = array();
             }
         }
-        $d = Documentos::emitir($ctx, 'post_guia.php', $b, '09', $b['guia']['serie'], $b['guia']['numero']);
+        if ($auto) {
+            Series::exigirAutomatica($ctx, '09', (string) $b['guia']['serie']);
+        }
+        $d = Documentos::emitir($ctx, 'post_guia.php', $b, '09', $b['guia']['serie'], $auto ? null : $b['guia']['numero'],
+            function (array &$cu, $num) {
+                $cu['guia']['numero'] = $num;
+            });
         break;
 
     case '/tickets':
@@ -271,7 +365,7 @@ switch ($ruta) {
         $v->lanzarSiHayErrores();
         $emp = Motor::empresa($empresa, $ctx['key']['entorno']);
         if ($b['tipo'] === 'guia') {
-            $res = Motor::llamar('post_guia_ticket.php', array('empresa' => $emp, 'num_ticket' => $tk));
+            $res = Motor::llamar('post_guia_ticket.php', array('empresa' => $emp, 'num_ticket' => $tk), 25);
             $n = Motor::normalizar('post_guia_ticket.php', $res);
             foreach (array('xml', 'cdr', 'pdf') as $k) {
                 if (isset($n['archivos'][$k])) {
@@ -282,9 +376,9 @@ switch ($ruta) {
             Respuesta::ok($n);
         }
         if ($b['tipo'] === 'resumen') {
-            $res = Motor::llamar('resumen_ticket.php', array('empresa' => $emp, 'anulacion' => array('corelativo' => $b['correlativo'], 'fecha_ticket' => $b['fecha_ticket'], 'ticket' => $tk)));
+            $res = Motor::llamar('resumen_ticket.php', array('empresa' => $emp, 'anulacion' => array('corelativo' => $b['correlativo'], 'fecha_ticket' => $b['fecha_ticket'], 'ticket' => $tk)), 25);
         } else {
-            $res = Motor::llamar('baja_envia_ticket.php', array('empresa' => $emp, 'anulacion' => array('ticket' => $tk)));
+            $res = Motor::llamar('baja_envia_ticket.php', array('empresa' => $emp, 'anulacion' => array('ticket' => $tk)), 25);
         }
         if ($res['json'] === null) {
             error_log('[v1] consulta de ticket sin JSON: ' . substr($res['raw'], 0, 600));
