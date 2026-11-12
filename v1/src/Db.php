@@ -202,6 +202,8 @@ class Db
             self::pdo()->query('SELECT cuota FROM documentos LIMIT 1');
             self::pdo()->query('SELECT 1 FROM planes LIMIT 1');
             self::pdo()->query('SELECT 1 FROM limites LIMIT 1');
+            self::pdo()->query('SELECT 1 FROM usuarios_portal LIMIT 1');
+            self::pdo()->query('SELECT 1 FROM auditoria LIMIT 1');
         } catch (PDOException $e) {
             self::crearEsquema();
         }
@@ -368,6 +370,33 @@ class Db
             ventana INTEGER NOT NULL
         )");
         self::indice('CREATE INDEX idx_limites_ventana ON limites (ventana)');
+
+        // Portal de clientes: usuarios y registro de actividad (auditoria)
+        $pdo->exec("CREATE TABLE IF NOT EXISTS usuarios_portal (
+            id $pk,
+            empresa_id INTEGER NOT NULL,
+            email VARCHAR(190) NOT NULL UNIQUE,
+            nombre VARCHAR(120) NOT NULL,
+            rol VARCHAR(10) NOT NULL DEFAULT 'admin',
+            clave_hash VARCHAR(255) NOT NULL,
+            debe_cambiar INTEGER NOT NULL DEFAULT 1,
+            activo INTEGER NOT NULL DEFAULT 1,
+            intentos_fallidos INTEGER NOT NULL DEFAULT 0,
+            bloqueado_hasta VARCHAR(19) NULL,
+            ultimo_acceso VARCHAR(19) NULL,
+            creado VARCHAR(19) NOT NULL
+        )");
+        self::indice('CREATE INDEX idx_usuarios_empresa ON usuarios_portal (empresa_id)');
+        $pdo->exec("CREATE TABLE IF NOT EXISTS auditoria (
+            id $pk,
+            empresa_id INTEGER NOT NULL,
+            usuario_id INTEGER NULL,
+            accion VARCHAR(40) NOT NULL,
+            detalle VARCHAR(300) NULL,
+            ip VARCHAR(45) NULL,
+            creado VARCHAR(19) NOT NULL
+        )");
+        self::indice('CREATE INDEX idx_auditoria_empresa ON auditoria (empresa_id, id)');
 
         self::migrar();
     }

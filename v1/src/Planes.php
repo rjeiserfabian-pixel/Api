@@ -68,7 +68,7 @@ class Planes
     }
 
     // ------------------------------------------------------------------ limite de velocidad
-    private static function incrementar($clave, $ventana)
+    public static function incrementar($clave, $ventana)
     {
         if (Db::afectadas('UPDATE limites SET n = n + 1 WHERE clave = ?', array($clave)) === 0) {
             try {

@@ -1,0 +1,8 @@
+# Portal de clientes: toda peticion (salvo /assets/) entra por index.php. Asi los archivos internos
+# (src/, views/) nunca se ejecutan ni se descargan directamente.
+Options -Indexes
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteCond %{REQUEST_URI} !/assets/
+  RewriteRule ^ index.php [L]
+</IfModule>

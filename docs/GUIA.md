@@ -240,7 +240,17 @@ php -r 'echo json_encode(["pfx_base64"=>base64_encode(file_get_contents("empresa
 
 Se valida que sea RSA, que la llave corresponda al certificado, que esté vigente y que contenga el RUC de la empresa. La llave privada se guarda cifrada. `GET /certificado` o `GET /me` muestran los días restantes. Sin certificado de producción, una llave `live` responde `422 certificado_requerido` (no se envía nada).
 
-## 10. Probar que todo funciona
+## 10. Portal de clientes
+
+Direccion: `/portal/`. Cada cliente entra con su correo y contrasena y ve **solo su empresa**: plan y cuota del mes, estado del certificado, documentos (con detalle, XML/CDR/PDF), llaves API, webhooks y sus entregas, certificado digital, credenciales SOL/GRE y actividad.
+
+- **Alta de usuarios** (no hay auto-registro): `php bin/admin.php usuario:crear --ruc=… --email=… --nombre="…" --rol=admin`. Muestra una contrasena temporal **una sola vez**; el usuario debe cambiarla al primer ingreso.
+- **Olvido de contrasena**: `php bin/admin.php usuario:reset --email=…` (tambien desbloquea la cuenta).
+- **Roles**: `admin` (gestiona llaves, webhooks, certificado, credenciales y ve la actividad) y `lector` (solo consulta).
+- **Seguridad**: contrasenas con hash bcrypt; bloqueo de 15 min tras 5 fallos y limite por IP; sesion de 30 min de inactividad (8 h maximo); proteccion CSRF; politica CSP estricta (sin scripts en linea); las llaves API y secretos de webhook se muestran **una sola vez**; las credenciales SUNAT son de solo escritura; acciones sensibles piden la contrasena otra vez; todo queda en el registro de actividad.
+- **En produccion** active `PORTAL_REQUIERE_HTTPS=1` (ver `.env.example`) y sirvalo siempre por HTTPS.
+- Prueba automatica de seguridad: `php docs/probar_portal.php` (crea y borra dos empresas de laboratorio).
+## 11. Probar que todo funciona
 
 ```bash
 # Prueba real: ejecuta los ejemplos contra la API y verifica los resultados (usa SUNAT beta)
@@ -260,7 +270,7 @@ Rechaza llaves `sk_live_` a propósito. Úsela **después de cada cambio**: si t
 
 También puede importar `postman/API_SUNAT_v1.postman_collection.json` en Postman (44 peticiones con tests automáticos): ponga su llave de prueba en la variable `api_key` y ejecute primero «00 Iniciar tanda de numeros».
 
-## 11. Administración (solo línea de comandos)
+## 12. Administración (solo línea de comandos)
 
 ```bash
 php bin/admin.php init                       # prepara base de datos y claves (una vez)
@@ -273,6 +283,8 @@ php bin/admin.php serie:crear --ruc=… --entorno=test|live --tipo=03 --serie=B0
 php bin/admin.php serie:listar [--ruc=…] [--entorno=test|live]
 php bin/worker.php [--una-vez]                # reintentos y webhooks (dejarlo siempre encendido)
 php bin/admin.php plan:sembrar | plan:crear | plan:listar | empresa:plan | uso:ver   # planes, limites y cuota (seccion 8)
+php bin/admin.php usuario:crear --ruc=… --email=… --nombre="…" [--rol=admin|lector]   # acceso al portal (clave TEMPORAL, se muestra una vez)
+php bin/admin.php usuario:listar | usuario:reset --email=… | usuario:desactivar --email=… | usuario:activar --email=…
 ```
 
 **Respalde `APP_KEY`** (archivo `.env`): sin ella no se pueden descifrar las claves SOL ni las llaves de certificados guardadas.
@@ -298,7 +310,7 @@ php docs/probar.php --key=sk_test_XXXX && php docs/probar_numeracion.php --key=s
 
 Respalde la base y `APP_KEY` juntas: los secretos guardados solo se descifran con esa llave.
 
-## 12. Regenerar la documentación
+## 13. Regenerar la documentación
 
 Los ejemplos viven en `docs/ejemplos.php` (única fuente). Si cambia algo:
 
@@ -308,7 +320,7 @@ php postman/gen_v1.php            # colección de Postman
 php docs/probar.php --key=sk_test_…   # confirma que los ejemplos siguen funcionando
 ```
 
-## 13. Limitaciones conocidas
+## 14. Limitaciones conocidas
 
 - Un número **reservado** que nunca se envía queda como hueco en la serie (todavía no hay una operación para liberarlo).
 - Los tickets de **resumen, baja y reversión** no se resuelven solos (solo los de guías): se consultan con `POST /tickets`.

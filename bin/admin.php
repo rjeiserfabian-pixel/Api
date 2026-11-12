@@ -20,6 +20,8 @@
  *   php bin/admin.php plan:listar
  *   php bin/admin.php empresa:plan --ruc=20123456789 --plan=Basico|ninguno
  *   php bin/admin.php uso:ver [--ruc=20123456789]       # consumo del mes (solo llaves live)
+ *   php bin/admin.php usuario:crear --ruc=20123456789 --email=cliente@empresa.com --nombre="Nombre" [--rol=admin|lector]   # acceso al portal; muestra una clave TEMPORAL
+ *   php bin/admin.php usuario:listar [--ruc=...] | usuario:reset --email=... | usuario:desactivar --email=... | usuario:activar --email=...
  *   php bin/admin.php db:copiar --dsn="pgsql:host=127.0.0.1;port=5432;dbname=api_sunat" --user=... --pass=...
  *        Copia TODOS los datos de la base actual (la de DB_DSN o SQLite) a otra base VACIA (ej. PostgreSQL).
  *        No modifica el origen. Despues, cambie DB_DSN/DB_USER/DB_PASS en .env para usar la nueva base.
@@ -33,6 +35,7 @@ require_once $raiz . '/libraries/env.php';
 foreach (array('Respuesta', 'Db', 'Crypto', 'Auth', 'Series', 'Planes') as $c) {
     require_once $raiz . '/v1/src/' . $c . '.php';
 }
+require_once $raiz . '/portal/src/Usuarios.php';
 date_default_timezone_set('America/Lima');
 
 function salir($msg, $codigo = 1)
@@ -223,7 +226,7 @@ switch ($cmd) {
 
     case 'db:copiar':
         exigir($o, array('dsn'));
-        $tablas = array('planes', 'empresas', 'api_keys', 'certificados', 'series', 'documentos', 'uso', 'webhooks', 'eventos', 'entregas'); // (limites es transitoria: no se copia)
+        $tablas = array('planes', 'empresas', 'api_keys', 'certificados', 'series', 'documentos', 'uso', 'webhooks', 'eventos', 'entregas', 'usuarios_portal', 'auditoria'); // (limites es transitoria: no se copia)
         $origen = Db::pdo();
         $motorOrigen = $origen->getAttribute(PDO::ATTR_DRIVER_NAME);
         Db::asegurarEsquema();
@@ -283,7 +286,7 @@ switch ($cmd) {
         if (!$bien) {
             salir('La verificacion de conteos fallo.');
         }
-        echo "Copia verificada: los conteos coinciden en las 10 tablas." . PHP_EOL
+        echo "Copia verificada: los conteos coinciden en las 12 tablas." . PHP_EOL
             . "Para usar la nueva base, ponga en .env:  DB_DSN=" . $o['dsn'] . "  DB_USER=...  DB_PASS=..." . PHP_EOL;
         break;
 
@@ -377,6 +380,58 @@ switch ($cmd) {
         }
         break;
 
+    case 'usuario:crear':
+        exigir($o, array('ruc', 'email', 'nombre'));
+        Db::asegurarEsquema();
+        $e = Db::uno('SELECT * FROM empresas WHERE ruc = ?', array($o['ruc']));
+        if (!$e) {
+            salir('No existe esa empresa.');
+        }
+        try {
+            $r = Usuarios::crear($e['id'], $o['email'], $o['nombre'], isset($o['rol']) ? $o['rol'] : 'admin');
+        } catch (InvalidArgumentException $x) {
+            salir($x->getMessage());
+        }
+        Auditoria::registrar($e['id'], null, 'usuario_creado', strtolower($o['email']) . ' por el administrador del servicio');
+        echo "Usuario creado para {$e['razon_social']} ({$o['ruc']}): " . strtolower($o['email']) . PHP_EOL . PHP_EOL
+            . "  Contrasena TEMPORAL (se muestra una sola vez; deberá cambiarla al ingresar):" . PHP_EOL . PHP_EOL . "  {$r['clave']}" . PHP_EOL . PHP_EOL;
+        break;
+
+    case 'usuario:listar':
+        Db::asegurarEsquema();
+        $sql = 'SELECT u.*, e.ruc FROM usuarios_portal u JOIN empresas e ON e.id = u.empresa_id' . (isset($o['ruc']) ? ' WHERE e.ruc = ?' : '') . ' ORDER BY u.id';
+        foreach (Db::consultar($sql, isset($o['ruc']) ? array($o['ruc']) : array()) as $u) {
+            printf("%-3d %s  %-34s %-7s %s%s%s\n", $u['id'], $u['ruc'], $u['email'], $u['rol'], $u['ultimo_acceso'] ? 'ultimo acceso ' . $u['ultimo_acceso'] : 'nunca ingreso',
+                $u['activo'] ? '' : '  [DESACTIVADO]', ($u['bloqueado_hasta'] && strtotime($u['bloqueado_hasta']) > time()) ? '  [BLOQUEADO hasta ' . $u['bloqueado_hasta'] . ']' : '');
+        }
+        break;
+
+    case 'usuario:reset':
+        exigir($o, array('email'));
+        Db::asegurarEsquema();
+        try {
+            $clave = Usuarios::restablecer($o['email']);
+        } catch (InvalidArgumentException $x) {
+            salir($x->getMessage());
+        }
+        echo "Contrasena restablecida para " . strtolower($o['email']) . " (cuenta desbloqueada y activa)." . PHP_EOL . PHP_EOL
+            . "  Contrasena TEMPORAL (una sola vez; deberá cambiarla al ingresar):" . PHP_EOL . PHP_EOL . "  {$clave}" . PHP_EOL . PHP_EOL;
+        break;
+
+    case 'usuario:desactivar':
+    case 'usuario:activar':
+        exigir($o, array('email'));
+        Db::asegurarEsquema();
+        $u = Usuarios::porEmail($o['email']);
+        if (!$u) {
+            salir('No existe ese usuario.');
+        }
+        $act = $cmd === 'usuario:activar' ? 1 : 0;
+        Db::ejecutar('UPDATE usuarios_portal SET activo = ? WHERE id = ?', array($act, $u['id']));
+        Auditoria::registrar($u['empresa_id'], null, $act ? 'usuario_activado' : 'usuario_desactivado', $u['email'] . ' por el administrador del servicio');
+        echo ($act ? 'Usuario activado: ' : 'Usuario desactivado (ya no puede ingresar): ') . $u['email'] . PHP_EOL;
+        break;
+
     case 'serie:crear':
         exigir($o, array('ruc', 'entorno', 'tipo', 'serie'));
         if (!in_array($o['entorno'], array('test', 'live'), true)) {
@@ -425,6 +480,6 @@ switch ($cmd) {
         break;
 
     default:
-        echo "Comandos: init | empresa:crear | empresa:actualizar | empresa:listar | key:crear | key:listar | key:revocar | cert:subir | cert:ver | serie:crear | serie:listar | db:copiar | plan:sembrar | plan:crear | plan:listar | empresa:plan | uso:ver" . PHP_EOL
+        echo "Comandos: init | empresa:crear | empresa:actualizar | empresa:listar | key:crear | key:listar | key:revocar | cert:subir | cert:ver | serie:crear | serie:listar | db:copiar | plan:sembrar | plan:crear | plan:listar | empresa:plan | uso:ver | usuario:crear | usuario:listar | usuario:reset | usuario:activar | usuario:desactivar" . PHP_EOL
             . "Vea el encabezado de bin/admin.php para las opciones." . PHP_EOL;
 }
