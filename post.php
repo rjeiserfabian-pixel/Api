@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/libraries/guard.php';
 require_once __DIR__ . '/libraries/errores.php';
 
 //echo "abc";exit;

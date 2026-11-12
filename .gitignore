@@ -21,3 +21,7 @@ ws_sunat/respuesta_oauth.txt
 .vscode/
 .idea/
 *.log
+
+# Base de datos y datos locales de la API v1
+storage/*
+!storage/.htaccess

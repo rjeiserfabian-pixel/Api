@@ -1,5 +1,12 @@
 <IfModule mod_rewrite.c>
   RewriteEngine On
+
+  # Pasa la cabecera Authorization a PHP (Apache la descarta por defecto)
+  RewriteCond %{HTTP:Authorization} .
+  RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+  # API v1: todo /v1/... entra por un unico punto
+  RewriteRule ^v1(/.*)?$ v1/index.php [L,QSA]
 </IfModule>
 
 # No listar el contenido de las carpetas
