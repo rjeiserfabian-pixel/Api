@@ -171,14 +171,37 @@ class Db
             }
         }
         self::indice('CREATE INDEX idx_doc_numero ON documentos (empresa_id, tipo, serie, numero_n)');
+
+        // Reintentos automaticos: el cuerpo se guarda mientras el documento no sea final, para poder reenviarlo solo
+        $nuevas = array('script' => 'VARCHAR(40) NULL', 'cuerpo' => 'TEXT NULL', 'reintentos' => 'INTEGER NOT NULL DEFAULT 0',
+            'proximo_intento' => 'VARCHAR(19) NULL', 'actualizado' => 'VARCHAR(19) NULL', 'numeracion_auto' => 'INTEGER NOT NULL DEFAULT 0');
+        foreach ($nuevas as $col => $def) {
+            if (!self::columnaExiste('documentos', $col)) {
+                self::pdo()->exec('ALTER TABLE documentos ADD COLUMN ' . $col . ' ' . $def);
+            }
+        }
+        self::indice('CREATE INDEX idx_doc_pendientes ON documentos (estado, proximo_intento)');
+
+        // Planes: la empresa tiene un plan; el documento recuerda en que periodo (AAAA-MM) consumio cuota
+        if (!self::columnaExiste('empresas', 'plan_id')) {
+            self::pdo()->exec('ALTER TABLE empresas ADD COLUMN plan_id INTEGER NULL');
+        }
+        if (!self::columnaExiste('documentos', 'cuota')) {
+            self::pdo()->exec('ALTER TABLE documentos ADD COLUMN cuota VARCHAR(7) NULL');
+        }
     }
 
     /** Si falta el esquema nuevo (despues de actualizar el codigo), lo crea. Barato: 2 consultas. */
     public static function asegurarEsquema()
     {
         try {
-            self::pdo()->query('SELECT numero_n FROM documentos LIMIT 1');
+            self::pdo()->query('SELECT numero_n, reintentos, actualizado FROM documentos LIMIT 1');
             self::pdo()->query('SELECT 1 FROM series LIMIT 1');
+            self::pdo()->query('SELECT 1 FROM entregas LIMIT 1');
+            self::pdo()->query('SELECT plan_id FROM empresas LIMIT 1');
+            self::pdo()->query('SELECT cuota FROM documentos LIMIT 1');
+            self::pdo()->query('SELECT 1 FROM planes LIMIT 1');
+            self::pdo()->query('SELECT 1 FROM limites LIMIT 1');
         } catch (PDOException $e) {
             self::crearEsquema();
         }
@@ -277,6 +300,74 @@ class Db
             creado VARCHAR(19) NOT NULL
         )");
         self::indice('CREATE UNIQUE INDEX idx_serie ON series (empresa_id, entorno, tipo, serie)');
+
+        // Webhooks: destinos, eventos (lo que paso) y entregas (envio de cada evento a cada destino, con reintentos)
+        $pdo->exec("CREATE TABLE IF NOT EXISTS webhooks (
+            id $pk,
+            uid VARCHAR(40) NOT NULL UNIQUE,
+            empresa_id INTEGER NOT NULL,
+            entorno VARCHAR(4) NOT NULL,
+            url VARCHAR(500) NOT NULL,
+            secreto_cifrado $txt NOT NULL,
+            eventos VARCHAR(255) NULL,
+            activo INTEGER NOT NULL DEFAULT 1,
+            creado VARCHAR(19) NOT NULL
+        )");
+        self::indice('CREATE INDEX idx_webhook_empresa ON webhooks (empresa_id, entorno)');
+        $pdo->exec("CREATE TABLE IF NOT EXISTS eventos (
+            id $pk,
+            uid VARCHAR(40) NOT NULL UNIQUE,
+            empresa_id INTEGER NOT NULL,
+            entorno VARCHAR(4) NOT NULL,
+            tipo VARCHAR(40) NOT NULL,
+            documento_id INTEGER NULL,
+            payload $txt NOT NULL,
+            creado VARCHAR(19) NOT NULL
+        )");
+        $pdo->exec("CREATE TABLE IF NOT EXISTS entregas (
+            id $pk,
+            uid VARCHAR(40) NOT NULL UNIQUE,
+            evento_id INTEGER NOT NULL,
+            webhook_id INTEGER NOT NULL,
+            estado VARCHAR(12) NOT NULL,
+            intentos INTEGER NOT NULL DEFAULT 0,
+            proximo_intento VARCHAR(19) NULL,
+            reclamado VARCHAR(19) NULL,
+            ultimo_codigo INTEGER NULL,
+            ultimo_error VARCHAR(300) NULL,
+            entregado_en VARCHAR(19) NULL,
+            creado VARCHAR(19) NOT NULL
+        )");
+        self::indice('CREATE INDEX idx_entrega_pendiente ON entregas (estado, proximo_intento)');
+        self::indice('CREATE INDEX idx_entrega_webhook ON entregas (webhook_id, id)');
+
+        // Planes comerciales, consumo mensual y contadores del limite de velocidad
+        $pdo->exec("CREATE TABLE IF NOT EXISTS planes (
+            id $pk,
+            nombre VARCHAR(60) NOT NULL UNIQUE,
+            cuota_mensual INTEGER NULL,
+            limite_sunat_min INTEGER NULL,
+            limite_general_min INTEGER NULL,
+            max_webhooks INTEGER NOT NULL DEFAULT 5,
+            activo INTEGER NOT NULL DEFAULT 1,
+            creado VARCHAR(19) NOT NULL
+        )");
+        $pdo->exec("CREATE TABLE IF NOT EXISTS uso (
+            id $pk,
+            empresa_id INTEGER NOT NULL,
+            periodo VARCHAR(7) NOT NULL,
+            documentos INTEGER NOT NULL DEFAULT 0,
+            aviso80 INTEGER NOT NULL DEFAULT 0,
+            aviso100 INTEGER NOT NULL DEFAULT 0
+        )");
+        self::indice('CREATE UNIQUE INDEX idx_uso ON uso (empresa_id, periodo)');
+        $pdo->exec("CREATE TABLE IF NOT EXISTS limites (
+            id $pk,
+            clave VARCHAR(80) NOT NULL UNIQUE,
+            n INTEGER NOT NULL DEFAULT 0,
+            ventana INTEGER NOT NULL
+        )");
+        self::indice('CREATE INDEX idx_limites_ventana ON limites (ventana)');
 
         self::migrar();
     }

@@ -28,3 +28,6 @@ storage/*
 
 # Respuestas temporales del motor (si SUNAT devuelve un error HTML)
 ws_sunat/C[0-9]*.xml
+
+# Estado temporal de las pruebas de reintentos/webhooks
+docs/pruebas/tmp/

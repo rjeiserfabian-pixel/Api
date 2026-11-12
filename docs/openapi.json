@@ -3,7 +3,7 @@
     "info": {
         "title": "API SUNAT - Facturación electrónica",
         "version": "1.0.0",
-        "description": "API REST para emitir **comprobantes electrónicos a SUNAT** (facturas, boletas, notas, retenciones, guías, resúmenes y bajas) sin manejar XML, firmas ni servicios web de SUNAT: usted envía un JSON y recibe el resultado.\n\n## Primeros pasos\n1. Obtenga su **API key** (se la entrega el administrador). Hay dos tipos:\n   - `sk_test_…` → **pruebas**: envía al **beta** de SUNAT. No tiene efectos tributarios.\n   - `sk_live_…` → **producción**: documentos reales ante SUNAT.\n2. Envíela en cada petición: `Authorization: Bearer sk_test_…`\n3. Compruebe con `GET /me`.\n4. Emita su primera factura con `POST /comprobantes`.\n\n## Autenticación y entornos\nEl **entorno lo decide la llave**, no el JSON. Las credenciales SOL y el certificado digital de su empresa están registrados en la API: **no se envían en las peticiones**. Para producción la empresa debe registrar su certificado (`POST /certificado` con llave `live`).\n\n## Cómo leer las respuestas\nToda respuesta es `{ \"ok\": true, \"data\": … }` o `{ \"ok\": false, \"error\": { \"code\", \"message\", \"details\" } }`, y siempre incluye `request_id` (también en la cabecera `X-Request-Id`).\n\n- **HTTP 201**: la API procesó el documento. Mire `data.estado`: `aceptado`, `rechazado`, `pendiente` o `simulado`. **Que SUNAT rechace un documento no es un error HTTP**: `data.sunat.descripcion` explica el motivo.\n- **HTTP 4xx**: la petición no se procesó (datos inválidos, sin autenticar, duplicado…). No se envió nada a SUNAT.\n- **HTTP 5xx (500, 502, 504)**: fallo temporal del servicio o de SUNAT. Reintente con la misma `Idempotency-Key`.\n\n## Reintentos seguros: `Idempotency-Key`\nEnvíe en cada emisión una cabecera `Idempotency-Key` única por operación (por ejemplo, el id de su venta). Si no recibe respuesta (corte de red), repita **la misma petición con la misma clave**: recibirá el resultado guardado (`200` + `Idempotent-Replay: true`) sin riesgo de duplicar el documento ante SUNAT. Además, un tipo-serie-número ya aceptado o pendiente responde `409 documento_duplicado`.\n\n## Numeración y sincronización con su sistema comercial\nCada serie (por empresa y por entorno) tiene un **dueño**:\n\n- **`cliente`** (por defecto): su sistema comercial numera y envía `venta.numero` como siempre. La API **aprende** el último número usado (`GET /series`): no importa si salta o llega desordenado.\n- **`api`**: la API numera. Puede **omitir `numero`** (se asigna solo, de forma atómica, sin repetir) o **reservar números** con `POST /series/reservar`, imprimirlos en el comprobante y **enviarlos a SUNAT después** con ese mismo número.\n\nGarantías:\n- **Sin duplicados ni saltos por reintento:** la numeración automática exige `Idempotency-Key`; si el envío falla (SUNAT caído, corte de red) y usted reintenta con la misma clave, se **reutiliza el mismo número**.\n- Si SUNAT **rechaza** un documento numerado automáticamente, su número se libera y el documento corregido lo reutiliza.\n- Los números se comparan como enteros: `150` y `00000150` son el mismo documento.\n- Resúmenes, bajas y reversiones usan un **correlativo por día** que se asigna solo si lo omite.\n- Cada entorno tiene sus propias series: **registre también las de producción** (con `ultimo_numero` = el último que ya usó) antes de emitir con una llave `live`.\n\n**Consultar por serie y número** (por ejemplo, un cliente que recibió la boleta antes de que se enviara a SUNAT): `GET /comprobantes/{tipo}/{serie}/{numero}` responde `reservado`, `aceptado`, etc., o `404` si aún no existe.\n\n## Flujos frecuentes\n- **Anular una factura** (menos de 7 días): `POST /bajas` → ticket → `POST /tickets`. O emita una **nota de crédito** (motivo `01`).\n- **Anular una boleta**: no existe baja para boletas; envíela en un **resumen diario** con `status` = 3 (`POST /resumenes`).\n- **Boletas del día**: `POST /resumenes` (SUNAT lo exige para boletas).\n\n## Códigos de error\n| `code` | HTTP | Significado |\n|---|---|---|\n| `no_autenticado` | 401 | Falta la API key o es inválida/revocada |\n| `empresa_inactiva` | 403 | Empresa desactivada |\n| `ruta_no_encontrada`, `no_encontrado`, `certificado_no_registrado` | 404 | No existe |\n| `metodo_no_permitido` | 405 | Método HTTP incorrecto (cabecera `Allow`) |\n| `cuerpo_vacio`, `json_invalido`, `idempotency_key_invalida` | 400 | Petición mal formada |\n| `documento_duplicado`, `idempotencia_conflicto` | 409 | Ya existe / clave ya usada con otro cuerpo |\n| `cuerpo_muy_grande` | 413 | Más de 3 MB |\n| `validacion` | 422 | Datos inválidos: `details` lista cada campo y cómo corregirlo |\n| `certificado_requerido`, `certificado_vencido`, `certificado_invalido`, `llave_invalida`, `llave_no_corresponde`, `certificado_ruc_no_coincide`, `certificado_no_vigente` | 422 | Problema con el certificado digital |\n| `motor_no_disponible`, `motor_error` | 502 | El motor o SUNAT no respondieron: reintente |\n| `tiempo_agotado` | 504 | SUNAT no respondió a tiempo: reintente en unos minutos |\n| `error_interno` | 500 | Error inesperado: cite el `request_id` |\n\n## Limitaciones conocidas\n- Un número **reservado** que nunca se envía queda como hueco en la serie (todavía no hay una operación para liberarlo).\n- Sin límite de peticiones configurado todavía.\n- La consulta de tickets depende del servicio de SUNAT, que puede demorar o no responder (`504 tiempo_agotado`)."
+        "description": "API REST para emitir **comprobantes electrónicos a SUNAT** (facturas, boletas, notas, retenciones, guías, resúmenes y bajas) sin manejar XML, firmas ni servicios web de SUNAT: usted envía un JSON y recibe el resultado.\n\n## Primeros pasos\n1. Obtenga su **API key** (se la entrega el administrador). Hay dos tipos:\n   - `sk_test_…` → **pruebas**: envía al **beta** de SUNAT. No tiene efectos tributarios.\n   - `sk_live_…` → **producción**: documentos reales ante SUNAT.\n2. Envíela en cada petición: `Authorization: Bearer sk_test_…`\n3. Compruebe con `GET /me`.\n4. Emita su primera factura con `POST /comprobantes`.\n\n## Autenticación y entornos\nEl **entorno lo decide la llave**, no el JSON. Las credenciales SOL y el certificado digital de su empresa están registrados en la API: **no se envían en las peticiones**. Para producción la empresa debe registrar su certificado (`POST /certificado` con llave `live`).\n\n## Cómo leer las respuestas\nToda respuesta es `{ \"ok\": true, \"data\": … }` o `{ \"ok\": false, \"error\": { \"code\", \"message\", \"details\" } }`, y siempre incluye `request_id` (también en la cabecera `X-Request-Id`).\n\n- **HTTP 201**: la API procesó el documento. Mire `data.estado`: `aceptado`, `rechazado`, `pendiente` o `simulado`. **Que SUNAT rechace un documento no es un error HTTP**: `data.sunat.descripcion` explica el motivo.\n- **HTTP 4xx**: la petición no se procesó (datos inválidos, sin autenticar, duplicado…). No se envió nada a SUNAT.\n- **HTTP 5xx (500, 502, 504)**: fallo temporal del servicio o de SUNAT. Reintente con la misma `Idempotency-Key`.\n\n## Reintentos seguros: `Idempotency-Key`\nEnvíe en cada emisión una cabecera `Idempotency-Key` única por operación (por ejemplo, el id de su venta). Si no recibe respuesta (corte de red), repita **la misma petición con la misma clave**: recibirá el resultado guardado (`200` + `Idempotent-Replay: true`) sin riesgo de duplicar el documento ante SUNAT. Además, un tipo-serie-número ya aceptado o pendiente responde `409 documento_duplicado`.\n\n## Numeración y sincronización con su sistema comercial\nCada serie (por empresa y por entorno) tiene un **dueño**:\n\n- **`cliente`** (por defecto): su sistema comercial numera y envía `venta.numero` como siempre. La API **aprende** el último número usado (`GET /series`): no importa si salta o llega desordenado.\n- **`api`**: la API numera. Puede **omitir `numero`** (se asigna solo, de forma atómica, sin repetir) o **reservar números** con `POST /series/reservar`, imprimirlos en el comprobante y **enviarlos a SUNAT después** con ese mismo número.\n\nGarantías:\n- **Sin duplicados ni saltos por reintento:** la numeración automática exige `Idempotency-Key`; si el envío falla (SUNAT caído, corte de red) y usted reintenta con la misma clave, se **reutiliza el mismo número**.\n- Si SUNAT **rechaza** un documento numerado automáticamente, su número se libera y el documento corregido lo reutiliza.\n- Los números se comparan como enteros: `150` y `00000150` son el mismo documento.\n- Resúmenes, bajas y reversiones usan un **correlativo por día** que se asigna solo si lo omite.\n- Cada entorno tiene sus propias series: **registre también las de producción** (con `ultimo_numero` = el último que ya usó) antes de emitir con una llave `live`.\n\n**Consultar por serie y número** (por ejemplo, un cliente que recibió la boleta antes de que se enviara a SUNAT): `GET /comprobantes/{tipo}/{serie}/{numero}` responde `reservado`, `aceptado`, etc., o `404` si aún no existe.\n\n## Reintentos automáticos y webhooks\n**Reintentos.** Si envía un documento con `Idempotency-Key` y SUNAT (o el motor) falla por un problema **transitorio**, el documento queda en estado `error` conservando su número y la API **lo reenvía sola** con espera creciente: 1 min, 5 min, 15 min, 1 h, 3 h, 6 h y 12 h (8 intentos en total). Nunca se duplica: cada intento usa el mismo número, y si usted reintenta a la vez, solo uno de los dos envía. Un rechazo de SUNAT **no** se reintenta (hay que corregir los datos). Sin `Idempotency-Key` no hay reintentos automáticos: un reintento ajeno podría duplicar una venta que usted ya repitió con otro número.\n\n**Webhooks.** Registre una URL (`POST /webhooks`) y la API le avisa cuando un documento llega a un estado final, sin que usted tenga que consultar:\n\n| Evento | Cuándo |\n|---|---|\n| `documento.aceptado` | SUNAT aceptó el documento (también al resolverse un reintento o el ticket de una guía) |\n| `documento.rechazado` | SUNAT lo rechazó (`data.sunat` explica el motivo) |\n| `documento.error` | Se agotaron los reintentos (o el fallo no es reintentable): necesita atención |\n| `cuota.advertencia` | Su cuota mensual llegó al 80 % (`data`: plan, usados, restantes, porcentaje y fecha de reinicio; no es un documento) |\n| `cuota.agotada` | Su cuota mensual llegó al 100 % |\n\nCada aviso es un `POST` JSON `{ id, tipo, entorno, creado, data: <Documento> }`. **No incluye datos del cliente final**, solo el estado y los enlaces. Su servidor debe responder **2xx** en menos de 10 segundos; si no, la API reintenta (1 min, 5 min, 15 min, 1 h, 3 h, 6 h, 12 h, 24 h) y después marca la entrega como `fallido` (puede reenviarla con `POST /webhooks/{id}/entregas/{id}/reenviar`). Como puede haber reintentos, **el mismo evento puede llegar más de una vez: use `id` del evento para ignorar repetidos**.\n\n**Verifique la firma** de cada aviso (cabecera `X-Webhook-Signature: t=<unix>,v1=<hex>`): `hex = HMAC_SHA256(secreto, \"<unix>.<cuerpo exacto>\")`. Rechace avisos con firma inválida o con `t` de hace más de 5 minutos.\n\n```php\n$cuerpo = file_get_contents('php://input');\n[$t, $v1] = [substr(explode(',', $_SERVER['HTTP_X_WEBHOOK_SIGNATURE'])[0], 2), substr(explode(',', $_SERVER['HTTP_X_WEBHOOK_SIGNATURE'])[1], 3)];\n$ok = abs(time() - $t) < 300 && hash_equals(hash_hmac('sha256', $t . '.' . $cuerpo, $SECRETO_WHSEC), $v1);\n```\n\nPor seguridad, la URL debe ser **pública** (no se aceptan direcciones privadas, locales ni de metadatos de nube), con **HTTPS en producción**, sin usuario/clave y sin redirecciones. El **secreto** (`whsec_…`) se muestra una sola vez al crear el webhook. Todo esto lo ejecuta un proceso aparte (`php bin/worker.php`); `GET /health` indica si está `activo`.\n\n## Planes, límites y cuota\nSu plan define dos cosas distintas:\n\n**1. Límite de velocidad (peticiones por minuto).** Protege el servicio y a SUNAT; no se factura. Se mide **por API key** y por minuto, en dos clases:\n- **Emisiones** (`POST /comprobantes`, `/resumenes`, `/bajas`, `/reversiones`, `/retenciones`, `/guias`, `/tickets`): son las caras, porque dependen de SUNAT.\n- **Demás peticiones** (consultas, series, webhooks…): baratas, con un límite mayor.\n\nCada respuesta trae `X-RateLimit-Limit`, `X-RateLimit-Remaining` y `X-RateLimit-Reset` (segundos hasta el siguiente minuto). Si se excede: **`429`** con la cabecera **`Retry-After`** (segundos). Además existe un **tope global de emisiones** (para que ningún cliente degrade a los demás): si el servicio está saturado recibirá `429 servicio_saturado`; espere y reintente. **Un 429 no pierde nada**: reintente con la misma `Idempotency-Key`.\n\n**2. Cuota mensual de documentos (lo que contrata).** Consumen cuota solo los documentos **emitidos y aceptados por SUNAT** (o recibidos y en espera de su ticket, como una guía) **con llave `live`**: factura, boleta, notas, retención y guía. **No consumen:** las pruebas (llave `test`), las consultas, las reservas de números, los **rechazos** de SUNAT, los resúmenes/bajas/reversiones, ni repetir un documento con la misma `Idempotency-Key`. Si SUNAT rechaza una guía al resolver su ticket, la unidad se devuelve. La cuota es **mensual** (mes calendario, hora de Lima).\n\nConsulte su consumo con `GET /uso`; las respuestas de emisión (`live`) traen `X-Quota-Limit` y `X-Quota-Remaining`. Al **80 %** y al **100 %** recibe un aviso por webhook (`cuota.advertencia`, `cuota.agotada`). Al agotarse la cuota, emitir en producción responde **`402 cuota_agotada`** (con la fecha de reinicio; no se envía nada a SUNAT); las pruebas, las consultas y repetir documentos ya emitidos siguen funcionando.\n\n## Flujos frecuentes\n- **Anular una factura** (menos de 7 días): `POST /bajas` → ticket → `POST /tickets`. O emita una **nota de crédito** (motivo `01`).\n- **Anular una boleta**: no existe baja para boletas; envíela en un **resumen diario** con `status` = 3 (`POST /resumenes`).\n- **Boletas del día**: `POST /resumenes` (SUNAT lo exige para boletas).\n\n## Códigos de error\n| `code` | HTTP | Significado |\n|---|---|---|\n| `no_autenticado` | 401 | Falta la API key o es inválida/revocada |\n| `empresa_inactiva` | 403 | Empresa desactivada |\n| `ruta_no_encontrada`, `no_encontrado`, `certificado_no_registrado` | 404 | No existe |\n| `metodo_no_permitido` | 405 | Método HTTP incorrecto (cabecera `Allow`) |\n| `cuerpo_vacio`, `json_invalido`, `idempotency_key_invalida` | 400 | Petición mal formada |\n| `documento_duplicado`, `idempotencia_conflicto` | 409 | Ya existe / clave ya usada con otro cuerpo |\n| `cuerpo_muy_grande` | 413 | Más de 3 MB |\n| `validacion` | 422 | Datos inválidos: `details` lista cada campo y cómo corregirlo |\n| `certificado_requerido`, `certificado_vencido`, `certificado_invalido`, `llave_invalida`, `llave_no_corresponde`, `certificado_ruc_no_coincide`, `certificado_no_vigente` | 422 | Problema con el certificado digital |\n| `motor_no_disponible`, `motor_error` | 502 | El motor o SUNAT no respondieron: reintente |\n| `tiempo_agotado` | 504 | SUNAT no respondió a tiempo: reintente en unos minutos |\n| `limite_de_peticiones`, `servicio_saturado` | 429 | Demasiadas peticiones por minuto, o servicio saturado de emisiones: espere `Retry-After` segundos |\n| `cuota_agotada` | 402 | Cuota mensual de documentos agotada (o plan sin producción) |\n| `error_interno` | 500 | Error inesperado: cite el `request_id` |\n\n## Limitaciones conocidas\n- Un número **reservado** que nunca se envía queda como hueco en la serie (todavía no hay una operación para liberarlo).\n- El límite de velocidad usa ventanas de un minuto: una ráfaga justo en el cambio de minuto puede acercarse al doble del límite durante unos segundos.\n- La cuota se comprueba antes de emitir: con muchas emisiones simultáneas justo al final de la cuota puede excederse por unos pocos documentos.\n- La consulta de tickets depende del servicio de SUNAT, que puede demorar o no responder (`504 tiempo_agotado`).\n- Los tickets de **guías** se consultan solos hasta resolverse; los de **resumen, baja y reversión** se siguen consultando con `POST /tickets` (todavía no se resuelven solos).\n- Los avisos se entregan **al menos una vez** (pueden repetirse) y sin garantía de orden entre documentos distintos."
     },
     "servers": [
         {
@@ -36,6 +36,9 @@
         },
         {
             "name": "Series y numeración"
+        },
+        {
+            "name": "Webhooks"
         },
         {
             "name": "Historial"
@@ -78,6 +81,15 @@
                                                 "hora": {
                                                     "type": "string",
                                                     "format": "date-time"
+                                                },
+                                                "worker": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "activo",
+                                                        "detenido",
+                                                        "sin_iniciar"
+                                                    ],
+                                                    "description": "Proceso en segundo plano (reintentos y webhooks): `activo` si corrió hace menos de 60 s."
                                                 }
                                             }
                                         },
@@ -150,6 +162,9 @@
                     },
                     "405": {
                         "$ref": "#/components/responses/R405"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
                     }
                 }
             }
@@ -202,6 +217,9 @@
                     },
                     "404": {
                         "$ref": "#/components/responses/R404"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
                     }
                 }
             },
@@ -287,6 +305,9 @@
                     },
                     "500": {
                         "$ref": "#/components/responses/R500"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
                     }
                 }
             }
@@ -703,6 +724,12 @@
                     },
                     "504": {
                         "$ref": "#/components/responses/R504"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
+                    },
+                    "402": {
+                        "$ref": "#/components/responses/R402"
                     }
                 },
                 "parameters": [
@@ -903,6 +930,9 @@
                     },
                     "504": {
                         "$ref": "#/components/responses/R504"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
                     }
                 },
                 "parameters": [
@@ -1085,6 +1115,9 @@
                     },
                     "504": {
                         "$ref": "#/components/responses/R504"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
                     }
                 },
                 "parameters": [
@@ -1273,6 +1306,9 @@
                     },
                     "504": {
                         "$ref": "#/components/responses/R504"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
                     }
                 },
                 "parameters": [
@@ -1487,6 +1523,12 @@
                     },
                     "504": {
                         "$ref": "#/components/responses/R504"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
+                    },
+                    "402": {
+                        "$ref": "#/components/responses/R402"
                     }
                 },
                 "parameters": [
@@ -1722,6 +1764,12 @@
                     },
                     "504": {
                         "$ref": "#/components/responses/R504"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
+                    },
+                    "402": {
+                        "$ref": "#/components/responses/R402"
                     }
                 },
                 "parameters": [
@@ -1833,6 +1881,9 @@
                                 }
                             }
                         }
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
                     }
                 }
             }
@@ -1944,6 +1995,9 @@
                     },
                     "405": {
                         "$ref": "#/components/responses/R405"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
                     }
                 }
             }
@@ -2031,6 +2085,9 @@
                     },
                     "404": {
                         "$ref": "#/components/responses/R404"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
                     }
                 }
             }
@@ -2100,6 +2157,9 @@
                     },
                     "403": {
                         "$ref": "#/components/responses/R403"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
                     }
                 }
             },
@@ -2228,6 +2288,9 @@
                     },
                     "500": {
                         "$ref": "#/components/responses/R500"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
                     }
                 }
             }
@@ -2325,6 +2388,9 @@
                     },
                     "500": {
                         "$ref": "#/components/responses/R500"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
                     }
                 }
             }
@@ -2416,6 +2482,619 @@
                     },
                     "404": {
                         "$ref": "#/components/responses/R404"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
+                    }
+                }
+            }
+        },
+        "/webhooks": {
+            "get": {
+                "tags": [
+                    "Webhooks"
+                ],
+                "operationId": "listarWebhooks",
+                "summary": "Listar webhooks",
+                "description": "Los webhooks de **este entorno**. Nunca incluye el secreto.",
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Webhooks.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/ListadoWebhooks"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                },
+                                "example": {
+                                    "ok": true,
+                                    "data": {
+                                        "items": [
+                                            {
+                                                "id": "wh_0123456789abcdef0123",
+                                                "url": "https://midominio.com/webhooks/sunat",
+                                                "eventos": [
+                                                    "documento.aceptado",
+                                                    "documento.rechazado",
+                                                    "documento.error",
+                                                    "cuota.advertencia",
+                                                    "cuota.agotada"
+                                                ],
+                                                "activo": true,
+                                                "entorno": "prueba",
+                                                "creado": "2026-11-12 10:00:00"
+                                            }
+                                        ]
+                                    },
+                                    "request_id": "req_x"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/R401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/R403"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
+                    }
+                }
+            },
+            "post": {
+                "tags": [
+                    "Webhooks"
+                ],
+                "operationId": "crearWebhook",
+                "summary": "Registrar un webhook",
+                "description": "La API avisará a esta URL cuando un documento llegue a un estado final (`documento.aceptado`, `documento.rechazado`, `documento.error`). Hasta 5 por entorno.\n\nLa respuesta incluye el **secreto** (`whsec_…`) **una sola vez**: úselo para verificar la firma de cada aviso. Antes de depender de él, pruebe el destino con `POST /webhooks/{id}/probar`.",
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/WebhookRequest"
+                            },
+                            "examples": {
+                                "todos": {
+                                    "summary": "Todos los eventos",
+                                    "value": {
+                                        "url": "https://midominio.com/webhooks/sunat"
+                                    }
+                                },
+                                "solo_problemas": {
+                                    "summary": "Solo rechazos y errores",
+                                    "value": {
+                                        "url": "https://midominio.com/webhooks/sunat",
+                                        "eventos": [
+                                            "documento.rechazado",
+                                            "documento.error"
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Webhook creado (con el secreto).",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/Webhook"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                },
+                                "example": {
+                                    "ok": true,
+                                    "data": {
+                                        "id": "wh_0123456789abcdef0123",
+                                        "url": "https://midominio.com/webhooks/sunat",
+                                        "eventos": [
+                                            "documento.aceptado",
+                                            "documento.rechazado",
+                                            "documento.error",
+                                            "cuota.advertencia",
+                                            "cuota.agotada"
+                                        ],
+                                        "activo": true,
+                                        "entorno": "prueba",
+                                        "creado": "2026-11-12 10:00:00",
+                                        "secreto": "whsec_0123456789abcdef0123456789abcdef0123456789abcdef",
+                                        "aviso": "Guarde este secreto ahora: no se vuelve a mostrar."
+                                    },
+                                    "request_id": "req_x"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/R400"
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/R401"
+                    },
+                    "409": {
+                        "$ref": "#/components/responses/R409"
+                    },
+                    "422": {
+                        "$ref": "#/components/responses/R422"
+                    },
+                    "500": {
+                        "$ref": "#/components/responses/R500"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
+                    }
+                }
+            }
+        },
+        "/webhooks/{id}": {
+            "delete": {
+                "tags": [
+                    "Webhooks"
+                ],
+                "operationId": "eliminarWebhook",
+                "summary": "Eliminar un webhook",
+                "description": "Elimina el webhook y sus entregas pendientes.",
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ],
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "pattern": "^wh_[a-f0-9]{20}$"
+                        },
+                        "example": "wh_0123456789abcdef0123"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Eliminado.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "type": "object",
+                                            "properties": {
+                                                "id": {
+                                                    "type": "string",
+                                                    "description": "Id."
+                                                },
+                                                "eliminado": {
+                                                    "type": "boolean"
+                                                }
+                                            }
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                },
+                                "example": {
+                                    "ok": true,
+                                    "data": {
+                                        "id": "wh_0123456789abcdef0123",
+                                        "eliminado": true
+                                    },
+                                    "request_id": "req_x"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/R401"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/R404"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
+                    }
+                }
+            }
+        },
+        "/webhooks/{id}/probar": {
+            "post": {
+                "tags": [
+                    "Webhooks"
+                ],
+                "operationId": "probarWebhook",
+                "summary": "Enviar un evento de prueba",
+                "description": "Envía **ahora** un evento `webhook.prueba` firmado (un solo intento, sin reintentos) y dice si su servidor respondió 2xx.",
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ],
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "pattern": "^wh_[a-f0-9]{20}$"
+                        },
+                        "example": "wh_0123456789abcdef0123"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Resultado del envío de prueba (también cuando su servidor falla: mire `entregado`).",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/PruebaWebhook"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                },
+                                "example": {
+                                    "ok": true,
+                                    "data": {
+                                        "entrega": "ent_0123456789abcdef0123",
+                                        "entregado": true,
+                                        "http": 200,
+                                        "error": null
+                                    },
+                                    "request_id": "req_x"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/R401"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/R404"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
+                    }
+                }
+            }
+        },
+        "/webhooks/{id}/entregas": {
+            "get": {
+                "tags": [
+                    "Webhooks"
+                ],
+                "operationId": "listarEntregas",
+                "summary": "Historial de entregas de un webhook",
+                "description": "Las últimas entregas (más recientes primero), con su estado, intentos y el último error: sirve para depurar su servidor.",
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ],
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "pattern": "^wh_[a-f0-9]{20}$"
+                        }
+                    },
+                    {
+                        "name": "estado",
+                        "in": "query",
+                        "schema": {
+                            "type": "string",
+                            "enum": [
+                                "pendiente",
+                                "enviando",
+                                "entregado",
+                                "fallido"
+                            ]
+                        },
+                        "description": "Filtra por estado."
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "schema": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 100,
+                            "default": 20
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Entregas.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/ListadoEntregas"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/R401"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/R404"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
+                    }
+                }
+            }
+        },
+        "/webhooks/{id}/entregas/{entregaId}/reenviar": {
+            "post": {
+                "tags": [
+                    "Webhooks"
+                ],
+                "operationId": "reenviarEntrega",
+                "summary": "Reenviar una entrega",
+                "description": "Vuelve a poner en cola una entrega `fallido` o `entregado` (por ejemplo, después de arreglar su servidor). Se envía en el próximo ciclo del worker.",
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ],
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "pattern": "^wh_[a-f0-9]{20}$"
+                        }
+                    },
+                    {
+                        "name": "entregaId",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "pattern": "^ent_[a-f0-9]{20}$"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "En cola.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "type": "object",
+                                            "properties": {
+                                                "id": {
+                                                    "type": "string",
+                                                    "description": "Entrega."
+                                                },
+                                                "estado": {
+                                                    "type": "string",
+                                                    "description": "pendiente"
+                                                },
+                                                "aviso": {
+                                                    "type": "string",
+                                                    "description": "Nota."
+                                                }
+                                            }
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                },
+                                "example": {
+                                    "ok": true,
+                                    "data": {
+                                        "id": "ent_0123456789abcdef0123",
+                                        "estado": "pendiente",
+                                        "aviso": "Se enviara en el proximo ciclo del worker."
+                                    },
+                                    "request_id": "req_x"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/R401"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/R404"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
+                    }
+                }
+            }
+        },
+        "/uso": {
+            "get": {
+                "tags": [
+                    "Sistema"
+                ],
+                "operationId": "uso",
+                "summary": "Plan, consumo del mes y limites",
+                "description": "Su plan, cuantos documentos lleva este mes, cuantos le quedan y cuando se reinicia la cuota, y sus limites de velocidad. Consultar el uso es gratis y no consume cuota. **El consumo es el de produccion (`live`) aunque use una llave de prueba.**",
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Plan y consumo.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/Uso"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                },
+                                "example": {
+                                    "ok": true,
+                                    "data": {
+                                        "plan": {
+                                            "nombre": "Basico",
+                                            "cuota_mensual": 500,
+                                            "limite_emisiones_por_minuto": 20,
+                                            "limite_peticiones_por_minuto": 120,
+                                            "max_webhooks": 2
+                                        },
+                                        "periodo": "2026-11",
+                                        "documentos_usados": 120,
+                                        "documentos_restantes": 380,
+                                        "porcentaje": 24,
+                                        "reinicia": "2026-12-01T00:00:00-05:00",
+                                        "nota": "Solo los documentos emitidos y aceptados con una llave de produccion (live) consumen cuota."
+                                    },
+                                    "request_id": "req_x"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/R401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/R403"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
                     }
                 }
             }
@@ -2467,7 +3146,7 @@
                     "procesando",
                     "error"
                 ],
-                "description": "- `aceptado`: SUNAT aceptó el documento (tiene CDR).\n- `rechazado`: SUNAT lo rechazó; `sunat.codigo` y `sunat.descripcion` explican el motivo. **El HTTP sigue siendo 201**: el rechazo es un resultado de negocio, no un error de la API. Corrija los datos y envíe de nuevo.\n- `pendiente`: SUNAT lo recibió y devolvió un `ticket`; consulte el resultado con `POST /tickets`.\n- `simulado`: solo con llave `test` en guías de remisión: se generó y firmó pero **no se envió** (SUNAT no tiene entorno de pruebas para guías).\n- `reservado`: número apartado con `POST /series/reservar` que todavía no se envió a SUNAT.\n- `procesando`: la API lo está enviando, o un intento anterior se interrumpió; reintente con la **misma** `Idempotency-Key`.\n- `error`: el envío falló antes de recibir respuesta de SUNAT (por ejemplo, SUNAT caído). **El número queda guardado**: reintente con la misma `Idempotency-Key` y se reutiliza."
+                "description": "- `aceptado`: SUNAT aceptó el documento (tiene CDR).\n- `rechazado`: SUNAT lo rechazó; `sunat.codigo` y `sunat.descripcion` explican el motivo. **El HTTP sigue siendo 201**: el rechazo es un resultado de negocio, no un error de la API. Corrija los datos y envíe de nuevo.\n- `pendiente`: SUNAT lo recibió y devolvió un `ticket`; consulte el resultado con `POST /tickets`.\n- `simulado`: solo con llave `test` en guías de remisión: se generó y firmó pero **no se envió** (SUNAT no tiene entorno de pruebas para guías).\n- `reservado`: número apartado con `POST /series/reservar` que todavía no se envió a SUNAT.\n- `procesando`: la API lo está enviando, o un intento anterior se interrumpió; reintente con la **misma** `Idempotency-Key`.\n- `error`: el envío falló antes de recibir respuesta de SUNAT (por ejemplo, SUNAT caído). **El número queda guardado**. Si el envío llegó con `Idempotency-Key`, **la API lo reintenta sola** (1 min, 5 min, 15 min, 1 h, 3 h, 6 h y 12 h) y avisa por webhook; también puede reintentarlo usted con la misma clave."
             },
             "Sunat": {
                 "type": "object",
@@ -3787,6 +4466,330 @@
                     "serie",
                     "numeros"
                 ]
+            },
+            "WebhookRequest": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "Dirección **pública** que recibirá los avisos (HTTPS en producción; sin usuario/clave; no se siguen redirecciones).",
+                        "example": "https://midominio.com/webhooks/sunat",
+                        "maxLength": 500
+                    },
+                    "eventos": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": [
+                                "documento.aceptado",
+                                "documento.rechazado",
+                                "documento.error",
+                                "cuota.advertencia",
+                                "cuota.agotada"
+                            ]
+                        },
+                        "description": "Eventos a recibir. Si se omite, todos."
+                    }
+                },
+                "required": [
+                    "url"
+                ]
+            },
+            "Webhook": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Identificador.",
+                        "example": "wh_0123456789abcdef0123"
+                    },
+                    "url": {
+                        "type": "string",
+                        "description": "Destino."
+                    },
+                    "eventos": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": [
+                                "documento.aceptado",
+                                "documento.rechazado",
+                                "documento.error",
+                                "cuota.advertencia",
+                                "cuota.agotada"
+                            ]
+                        }
+                    },
+                    "activo": {
+                        "type": "boolean"
+                    },
+                    "entorno": {
+                        "type": "string",
+                        "enum": [
+                            "prueba",
+                            "produccion"
+                        ]
+                    },
+                    "creado": {
+                        "type": "string",
+                        "description": "Fecha de creación."
+                    },
+                    "secreto": {
+                        "type": "string",
+                        "description": "**Solo al crear**: secreto para verificar la firma de los avisos. Guárdelo; no se vuelve a mostrar.",
+                        "example": "whsec_..."
+                    },
+                    "aviso": {
+                        "type": "string",
+                        "description": "Recordatorio sobre el secreto (solo al crear)."
+                    }
+                },
+                "required": [
+                    "id",
+                    "url",
+                    "eventos",
+                    "activo"
+                ]
+            },
+            "ListadoWebhooks": {
+                "type": "object",
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/Webhook"
+                        }
+                    }
+                },
+                "required": [
+                    "items"
+                ]
+            },
+            "Entrega": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Identificador de la entrega.",
+                        "example": "ent_0123456789abcdef0123"
+                    },
+                    "evento": {
+                        "type": "object",
+                        "properties": {
+                            "id": {
+                                "type": "string",
+                                "description": "Id del evento (úselo para ignorar repetidos)."
+                            },
+                            "tipo": {
+                                "type": "string",
+                                "description": "Tipo de evento."
+                            }
+                        }
+                    },
+                    "estado": {
+                        "type": "string",
+                        "enum": [
+                            "pendiente",
+                            "enviando",
+                            "entregado",
+                            "fallido"
+                        ],
+                        "description": "`pendiente`: en cola o esperando el siguiente reintento; `entregado`: su servidor respondió 2xx; `fallido`: se agotaron los intentos."
+                    },
+                    "intentos": {
+                        "type": "integer",
+                        "description": "Intentos realizados."
+                    },
+                    "proximo_intento": {
+                        "type": "string",
+                        "description": "Cuándo se reintentará.",
+                        "nullable": true
+                    },
+                    "ultimo_http": {
+                        "type": "integer",
+                        "description": "Último código HTTP recibido de su servidor.",
+                        "nullable": true
+                    },
+                    "ultimo_error": {
+                        "type": "string",
+                        "description": "Motivo del último fallo.",
+                        "nullable": true
+                    },
+                    "entregado_en": {
+                        "type": "string",
+                        "description": "Cuándo se entregó.",
+                        "nullable": true
+                    },
+                    "creado": {
+                        "type": "string",
+                        "description": "Creada."
+                    }
+                }
+            },
+            "ListadoEntregas": {
+                "type": "object",
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/Entrega"
+                        }
+                    }
+                },
+                "required": [
+                    "items"
+                ]
+            },
+            "PruebaWebhook": {
+                "type": "object",
+                "properties": {
+                    "entrega": {
+                        "type": "string",
+                        "description": "Id de la entrega de prueba."
+                    },
+                    "entregado": {
+                        "type": "boolean"
+                    },
+                    "http": {
+                        "type": "integer",
+                        "description": "Código HTTP de su servidor.",
+                        "nullable": true
+                    },
+                    "error": {
+                        "type": "string",
+                        "description": "Motivo si falló.",
+                        "nullable": true
+                    }
+                },
+                "required": [
+                    "entregado"
+                ]
+            },
+            "EventoWebhook": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Id único del evento (puede llegar repetido: use este campo para ignorar duplicados).",
+                        "example": "evt_0123456789abcdef0123"
+                    },
+                    "tipo": {
+                        "type": "string",
+                        "enum": [
+                            "documento.aceptado",
+                            "documento.rechazado",
+                            "documento.error",
+                            "cuota.advertencia",
+                            "cuota.agotada",
+                            "webhook.prueba"
+                        ]
+                    },
+                    "entorno": {
+                        "type": "string",
+                        "enum": [
+                            "prueba",
+                            "produccion"
+                        ]
+                    },
+                    "creado": {
+                        "type": "string",
+                        "description": "Fecha y hora (Lima)."
+                    },
+                    "data": {
+                        "allOf": [
+                            {
+                                "$ref": "#/components/schemas/Documento"
+                            }
+                        ],
+                        "description": "El documento (sin datos del cliente final). En `webhook.prueba`: `{\"mensaje\": \"...\"}`."
+                    }
+                },
+                "required": [
+                    "id",
+                    "tipo",
+                    "entorno",
+                    "creado",
+                    "data"
+                ]
+            },
+            "Uso": {
+                "type": "object",
+                "properties": {
+                    "plan": {
+                        "type": "object",
+                        "properties": {
+                            "nombre": {
+                                "type": "string",
+                                "description": "Nombre del plan (`sin_plan` si no tiene uno asignado: sin limites).",
+                                "example": "Basico"
+                            },
+                            "cuota_mensual": {
+                                "type": "integer",
+                                "description": "Documentos por mes. `null` = ilimitada; `0` = no incluye produccion.",
+                                "nullable": true,
+                                "example": 500
+                            },
+                            "limite_emisiones_por_minuto": {
+                                "type": "integer",
+                                "description": "Emisiones y consultas de ticket por minuto y por API key. `null` = sin limite.",
+                                "nullable": true,
+                                "example": 20
+                            },
+                            "limite_peticiones_por_minuto": {
+                                "type": "integer",
+                                "description": "Demas peticiones (consultas, series, webhooks...) por minuto y por API key. `null` = sin limite.",
+                                "nullable": true,
+                                "example": 120
+                            },
+                            "max_webhooks": {
+                                "type": "integer",
+                                "description": "Webhooks permitidos por entorno.",
+                                "example": 2
+                            }
+                        },
+                        "required": [
+                            "nombre",
+                            "max_webhooks"
+                        ]
+                    },
+                    "periodo": {
+                        "type": "string",
+                        "description": "Mes de la cuota (AAAA-MM, hora de Lima).",
+                        "example": "2026-11"
+                    },
+                    "documentos_usados": {
+                        "type": "integer",
+                        "description": "Documentos emitidos y aceptados este mes con llave `live`.",
+                        "example": 120
+                    },
+                    "documentos_restantes": {
+                        "type": "integer",
+                        "description": "Lo que le queda este mes (`null` si es ilimitada).",
+                        "nullable": true,
+                        "example": 380
+                    },
+                    "porcentaje": {
+                        "type": "number",
+                        "description": "Porcentaje de la cuota consumido.",
+                        "nullable": true,
+                        "example": 24
+                    },
+                    "reinicia": {
+                        "type": "string",
+                        "description": "Cuando se reinicia la cuota (primer dia del mes siguiente).",
+                        "format": "date-time"
+                    },
+                    "nota": {
+                        "type": "string",
+                        "description": "Que consume cuota."
+                    }
+                },
+                "required": [
+                    "plan",
+                    "periodo",
+                    "documentos_usados",
+                    "reinicia"
+                ]
             }
         },
         "responses": {
@@ -3881,7 +4884,7 @@
                 }
             },
             "R409": {
-                "description": "Conflicto: `documento_duplicado` (ya existe ese tipo/serie/número aceptado o pendiente) `idempotencia_conflicto` (la `Idempotency-Key` ya se usó con otro cuerpo), `peticion_en_curso` / `documento_en_proceso` (ya se está procesando), `numero_no_reservado` (serie en modo `api`: el número no fue reservado), `serie_no_automatica` (reservar en una serie que numera su sistema) o `serie_agotada`.",
+                "description": "Conflicto: `documento_duplicado` (ya existe ese tipo/serie/número aceptado o pendiente) `idempotencia_conflicto` (la `Idempotency-Key` ya se usó con otro cuerpo), `peticion_en_curso` / `documento_en_proceso` (ya se está procesando), `numero_no_reservado` (serie en modo `api`: el número no fue reservado), `serie_no_automatica` (reservar en una serie que numera su sistema), `serie_agotada` o `limite_webhooks` (el plan limita los webhooks por entorno).",
                 "content": {
                     "application/json": {
                         "schema": {
@@ -3917,7 +4920,7 @@
                 }
             },
             "R422": {
-                "description": "Los datos no son válidos (`validacion`, con `details` por campo) o falta un dato de numeración (`numero_requerido`, `idempotency_key_requerida`: la numeración automática exige `Idempotency-Key`) o hay un problema con el certificado (`certificado_requerido`, `certificado_vencido`, `certificado_invalido`, `llave_invalida`, `llave_no_corresponde`, `certificado_ruc_no_coincide`, `certificado_no_vigente`). **No se envió nada a SUNAT.**",
+                "description": "Los datos no son válidos (`validacion`, con `details` por campo) o la URL de un webhook no es segura (`webhook_url_invalida`) o falta un dato de numeración (`numero_requerido`, `idempotency_key_requerida`: la numeración automática exige `Idempotency-Key`) o hay un problema con el certificado (`certificado_requerido`, `certificado_vencido`, `certificado_invalido`, `llave_invalida`, `llave_no_corresponde`, `certificado_ruc_no_coincide`, `certificado_no_vigente`). **No se envió nada a SUNAT.**",
                 "content": {
                     "application/json": {
                         "schema": {
@@ -3958,6 +4961,75 @@
                                 "message": "Error interno del servidor. Cite el request_id al pedir soporte."
                             },
                             "request_id": "req_a8122150f2caeaa0"
+                        }
+                    }
+                }
+            },
+            "R402": {
+                "description": "Cuota mensual de documentos agotada (`cuota_agotada`). `details` indica plan, cuota, usados y fecha de reinicio. **No se envio nada a SUNAT.** Repetir un documento ya emitido (misma `Idempotency-Key`), las pruebas (llave `test`) y las consultas siguen funcionando.",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/Error"
+                        },
+                        "example": {
+                            "ok": false,
+                            "error": {
+                                "code": "cuota_agotada",
+                                "message": "Agoto los 500 documentos de su plan Basico este mes. La cuota se reinicia el 01/12/2026. Contacte a su proveedor para ampliar su plan.",
+                                "details": {
+                                    "plan": "Basico",
+                                    "cuota_mensual": 500,
+                                    "usados": 500,
+                                    "reinicia": "2026-12-01T00:00:00-05:00"
+                                }
+                            },
+                            "request_id": "req_a8122150f2caeaa0"
+                        }
+                    }
+                },
+                "headers": {
+                    "X-Quota-Limit": {
+                        "description": "Cuota mensual del plan.",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    "X-Quota-Remaining": {
+                        "description": "Documentos que le quedan (0).",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                }
+            },
+            "R429": {
+                "description": "Demasiadas peticiones: supero el limite por minuto de su plan (`limite_de_peticiones`) o el servicio esta saturado de emisiones (`servicio_saturado`). Espere los segundos indicados en `Retry-After` y reintente. No se perdio nada.",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/Error"
+                        },
+                        "example": {
+                            "ok": false,
+                            "error": {
+                                "code": "limite_de_peticiones",
+                                "message": "Supero el limite de 20 emisiones y consultas de ticket por minuto de su plan Basico. Espere 14 segundos y reintente.",
+                                "details": {
+                                    "clase": "sunat",
+                                    "limite_por_minuto": 20,
+                                    "reintentar_en_segundos": 14
+                                }
+                            },
+                            "request_id": "req_a8122150f2caeaa0"
+                        }
+                    }
+                },
+                "headers": {
+                    "Retry-After": {
+                        "description": "Segundos que debe esperar antes de reintentar.",
+                        "schema": {
+                            "type": "integer"
                         }
                     }
                 }

@@ -80,7 +80,7 @@ function post($tag, $id, $resumen, $desc, $schemaReq, $ejemplos, array $respuest
 // ---------------- Esquemas ----------------
 $s = array();
 $s['Estado'] = array('type' => 'string', 'enum' => array('aceptado', 'rechazado', 'pendiente', 'simulado', 'reservado', 'procesando', 'error'),
-    'description' => "- `aceptado`: SUNAT aceptó el documento (tiene CDR).\n- `rechazado`: SUNAT lo rechazó; `sunat.codigo` y `sunat.descripcion` explican el motivo. **El HTTP sigue siendo 201**: el rechazo es un resultado de negocio, no un error de la API. Corrija los datos y envíe de nuevo.\n- `pendiente`: SUNAT lo recibió y devolvió un `ticket`; consulte el resultado con `POST /tickets`.\n- `simulado`: solo con llave `test` en guías de remisión: se generó y firmó pero **no se envió** (SUNAT no tiene entorno de pruebas para guías).\n- `reservado`: número apartado con `POST /series/reservar` que todavía no se envió a SUNAT.\n- `procesando`: la API lo está enviando, o un intento anterior se interrumpió; reintente con la **misma** `Idempotency-Key`.\n- `error`: el envío falló antes de recibir respuesta de SUNAT (por ejemplo, SUNAT caído). **El número queda guardado**: reintente con la misma `Idempotency-Key` y se reutiliza.");
+    'description' => "- `aceptado`: SUNAT aceptó el documento (tiene CDR).\n- `rechazado`: SUNAT lo rechazó; `sunat.codigo` y `sunat.descripcion` explican el motivo. **El HTTP sigue siendo 201**: el rechazo es un resultado de negocio, no un error de la API. Corrija los datos y envíe de nuevo.\n- `pendiente`: SUNAT lo recibió y devolvió un `ticket`; consulte el resultado con `POST /tickets`.\n- `simulado`: solo con llave `test` en guías de remisión: se generó y firmó pero **no se envió** (SUNAT no tiene entorno de pruebas para guías).\n- `reservado`: número apartado con `POST /series/reservar` que todavía no se envió a SUNAT.\n- `procesando`: la API lo está enviando, o un intento anterior se interrumpió; reintente con la **misma** `Idempotency-Key`.\n- `error`: el envío falló antes de recibir respuesta de SUNAT (por ejemplo, SUNAT caído). **El número queda guardado**. Si el envío llegó con `Idempotency-Key`, **la API lo reintenta sola** (1 min, 5 min, 15 min, 1 h, 3 h, 6 h y 12 h) y avisa por webhook; también puede reintentarlo usted con la misma clave.");
 $s['Sunat'] = obj(array('codigo' => str('Código de SUNAT (`0` = aceptado) o un código interno.', array('nullable' => true, 'example' => '0')), 'descripcion' => str('Mensaje de SUNAT.', array('nullable' => true))));
 $s['Archivos'] = obj(array('xml' => str('Enlace al XML firmado.', array('format' => 'uri')), 'cdr' => str('Enlace a la Constancia de Recepción (CDR) de SUNAT.', array('format' => 'uri')), 'pdf' => str('Enlace al PDF (si existe).', array('format' => 'uri')),
     'xml_base_64' => str('Solo con `?incluir=archivos`: ZIP con el XML firmado, en base64.'), 'cdr_base_64' => str('Solo con `?incluir=archivos`: ZIP con el CDR, en base64.')),
@@ -188,12 +188,18 @@ $resp = array(
     'R403' => resp('La empresa está desactivada (`empresa_inactiva`).', ref('Error'), errEj('empresa_inactiva', 'La empresa asociada a esta API key esta desactivada.')),
     'R404' => resp('No existe la ruta o el recurso (`ruta_no_encontrada`, `no_encontrado`, `certificado_no_registrado`, `serie_no_registrada`).', ref('Error'), errEj('no_encontrado', 'Documento no encontrado.')),
     'R405' => resp('Método HTTP no permitido en esa ruta (`metodo_no_permitido`). La cabecera `Allow` indica los permitidos.', ref('Error'), errEj('metodo_no_permitido', 'Use GET en /v1/me')),
-    'R409' => resp('Conflicto: `documento_duplicado` (ya existe ese tipo/serie/número aceptado o pendiente) `idempotencia_conflicto` (la `Idempotency-Key` ya se usó con otro cuerpo), `peticion_en_curso` / `documento_en_proceso` (ya se está procesando), `numero_no_reservado` (serie en modo `api`: el número no fue reservado), `serie_no_automatica` (reservar en una serie que numera su sistema) o `serie_agotada`.', ref('Error'),
+    'R409' => resp('Conflicto: `documento_duplicado` (ya existe ese tipo/serie/número aceptado o pendiente) `idempotencia_conflicto` (la `Idempotency-Key` ya se usó con otro cuerpo), `peticion_en_curso` / `documento_en_proceso` (ya se está procesando), `numero_no_reservado` (serie en modo `api`: el número no fue reservado), `serie_no_automatica` (reservar en una serie que numera su sistema), `serie_agotada` o `limite_webhooks` (el plan limita los webhooks por entorno).', ref('Error'),
         errEj('documento_duplicado', 'Ya existe 01 F001-94455099 con estado aceptado.')),
     'R413' => resp('El cuerpo supera 3 MB (`cuerpo_muy_grande`).', ref('Error'), errEj('cuerpo_muy_grande', 'El cuerpo supera 3 MB.')),
-    'R422' => resp('Los datos no son válidos (`validacion`, con `details` por campo) o falta un dato de numeración (`numero_requerido`, `idempotency_key_requerida`: la numeración automática exige `Idempotency-Key`) o hay un problema con el certificado (`certificado_requerido`, `certificado_vencido`, `certificado_invalido`, `llave_invalida`, `llave_no_corresponde`, `certificado_ruc_no_coincide`, `certificado_no_vigente`). **No se envió nada a SUNAT.**',
+    'R422' => resp('Los datos no son válidos (`validacion`, con `details` por campo) o la URL de un webhook no es segura (`webhook_url_invalida`) o falta un dato de numeración (`numero_requerido`, `idempotency_key_requerida`: la numeración automática exige `Idempotency-Key`) o hay un problema con el certificado (`certificado_requerido`, `certificado_vencido`, `certificado_invalido`, `llave_invalida`, `llave_no_corresponde`, `certificado_ruc_no_coincide`, `certificado_no_vigente`). **No se envió nada a SUNAT.**',
         ref('Error'), errEj('validacion', 'Los datos enviados no son validos.', array(array('campo' => 'venta.serie', 'mensaje' => 'la serie de una factura son 4 caracteres y empieza con F (ej. F001)'), array('campo' => 'items.0.codigo_sunat', 'mensaje' => 'es obligatorio: codigo de producto SUNAT de 8 digitos (catalogo 25, ej. 50202201)')))),
     'R500' => resp('Error interno (`error_interno`). Cite el `request_id`.', ref('Error'), errEj('error_interno', 'Error interno del servidor. Cite el request_id al pedir soporte.')),
+    'R402' => resp('Cuota mensual de documentos agotada (`cuota_agotada`). `details` indica plan, cuota, usados y fecha de reinicio. **No se envio nada a SUNAT.** Repetir un documento ya emitido (misma `Idempotency-Key`), las pruebas (llave `test`) y las consultas siguen funcionando.',
+        ref('Error'), errEj('cuota_agotada', 'Agoto los 500 documentos de su plan Basico este mes. La cuota se reinicia el 01/12/2026. Contacte a su proveedor para ampliar su plan.', array('plan' => 'Basico', 'cuota_mensual' => 500, 'usados' => 500, 'reinicia' => '2026-12-01T00:00:00-05:00')),
+        array('X-Quota-Limit' => array('description' => 'Cuota mensual del plan.', 'schema' => array('type' => 'integer')), 'X-Quota-Remaining' => array('description' => 'Documentos que le quedan (0).', 'schema' => array('type' => 'integer')))),
+    'R429' => resp('Demasiadas peticiones: supero el limite por minuto de su plan (`limite_de_peticiones`) o el servicio esta saturado de emisiones (`servicio_saturado`). Espere los segundos indicados en `Retry-After` y reintente. No se perdio nada.',
+        ref('Error'), errEj('limite_de_peticiones', 'Supero el limite de 20 emisiones y consultas de ticket por minuto de su plan Basico. Espere 14 segundos y reintente.', array('clase' => 'sunat', 'limite_por_minuto' => 20, 'reintentar_en_segundos' => 14)),
+        array('Retry-After' => array('description' => 'Segundos que debe esperar antes de reintentar.', 'schema' => array('type' => 'integer')))),
     'R504' => resp('SUNAT no respondió a tiempo (`tiempo_agotado`). No se perdió nada: reintente en unos minutos (con la misma `Idempotency-Key` si es una emisión).', ref('Error'), errEj('tiempo_agotado', 'SUNAT no respondio a tiempo. Intente de nuevo en unos minutos.')),
     'R502' => resp('El motor o SUNAT no respondieron (`motor_no_disponible`, `motor_error`). Reintente con la misma `Idempotency-Key`.', ref('Error'), errEj('motor_no_disponible', 'El motor de facturacion no respondio. Intente nuevamente.')),
 );
@@ -201,7 +207,7 @@ $resp = array(
 $seg = array(array('bearerAuth' => array()));
 $paths = array();
 $paths['/health'] = array('get' => array('tags' => array('Sistema'), 'operationId' => 'health', 'summary' => 'Estado del servicio', 'description' => 'No requiere autenticación. Úselo para monitoreo.', 'security' => array(),
-    'responses' => array('200' => resp('Servicio activo.', envelope(obj(array('servicio' => array('type' => 'string'), 'version' => array('type' => 'string'), 'hora' => array('type' => 'string', 'format' => 'date-time'))))))));
+    'responses' => array('200' => resp('Servicio activo.', envelope(obj(array('servicio' => array('type' => 'string'), 'version' => array('type' => 'string'), 'hora' => array('type' => 'string', 'format' => 'date-time'), 'worker' => array('type' => 'string', 'enum' => array('activo', 'detenido', 'sin_iniciar'), 'description' => 'Proceso en segundo plano (reintentos y webhooks): `activo` si corrió hace menos de 60 s.'))))))));
 $paths['/me'] = array('get' => array('tags' => array('Sistema'), 'operationId' => 'me', 'summary' => 'Empresa, entorno y certificado de la API key', 'description' => 'Útil para comprobar que la llave funciona y a qué entorno apunta (`test` → SUNAT beta, `live` → producción).', 'security' => $seg,
     'responses' => array('200' => resp('Datos de la empresa.', envelope(ref('Me'))), '401' => err('R401'), '403' => err('R403'), '405' => err('R405'))));
 $paths['/certificado'] = array(
@@ -291,6 +297,83 @@ $paths['/comprobantes/{tipo}/{serie}/{numero}'] = array('get' => array('tags' =>
     'responses' => array('200' => resp('El documento.', envelope(ref('Documento'))), '401' => err('R401'), '404' => err('R404'))));
 $paths['/comprobantes']['post']['requestBody']['content']['application/json']['examples']['boleta_auto'] = array(
     'summary' => 'Boleta con número automático (serie en modo api; exige Idempotency-Key)', 'value' => $ej['boleta_auto']);
+// ---------------- Webhooks ----------------
+$eventosWh = array('documento.aceptado', 'documento.rechazado', 'documento.error', 'cuota.advertencia', 'cuota.agotada');
+$s['WebhookRequest'] = obj(array('url' => str('Dirección **pública** que recibirá los avisos (HTTPS en producción; sin usuario/clave; no se siguen redirecciones).', array('example' => 'https://midominio.com/webhooks/sunat', 'maxLength' => 500)),
+    'eventos' => array('type' => 'array', 'items' => array('type' => 'string', 'enum' => $eventosWh), 'description' => 'Eventos a recibir. Si se omite, todos.')), array('url'));
+$s['Webhook'] = obj(array('id' => str('Identificador.', array('example' => 'wh_0123456789abcdef0123')), 'url' => str('Destino.'), 'eventos' => array('type' => 'array', 'items' => array('type' => 'string', 'enum' => $eventosWh)),
+    'activo' => array('type' => 'boolean'), 'entorno' => array('type' => 'string', 'enum' => array('prueba', 'produccion')), 'creado' => str('Fecha de creación.'),
+    'secreto' => str('**Solo al crear**: secreto para verificar la firma de los avisos. Guárdelo; no se vuelve a mostrar.', array('example' => 'whsec_...')), 'aviso' => str('Recordatorio sobre el secreto (solo al crear).')), array('id', 'url', 'eventos', 'activo'));
+$s['ListadoWebhooks'] = obj(array('items' => array('type' => 'array', 'items' => ref('Webhook'))), array('items'));
+$s['Entrega'] = obj(array('id' => str('Identificador de la entrega.', array('example' => 'ent_0123456789abcdef0123')), 'evento' => obj(array('id' => str('Id del evento (úselo para ignorar repetidos).'), 'tipo' => str('Tipo de evento.'))),
+    'estado' => array('type' => 'string', 'enum' => array('pendiente', 'enviando', 'entregado', 'fallido'), 'description' => '`pendiente`: en cola o esperando el siguiente reintento; `entregado`: su servidor respondió 2xx; `fallido`: se agotaron los intentos.'),
+    'intentos' => int_('Intentos realizados.'), 'proximo_intento' => str('Cuándo se reintentará.', array('nullable' => true)), 'ultimo_http' => int_('Último código HTTP recibido de su servidor.', array('nullable' => true)),
+    'ultimo_error' => str('Motivo del último fallo.', array('nullable' => true)), 'entregado_en' => str('Cuándo se entregó.', array('nullable' => true)), 'creado' => str('Creada.')));
+$s['ListadoEntregas'] = obj(array('items' => array('type' => 'array', 'items' => ref('Entrega'))), array('items'));
+$s['PruebaWebhook'] = obj(array('entrega' => str('Id de la entrega de prueba.'), 'entregado' => array('type' => 'boolean'), 'http' => int_('Código HTTP de su servidor.', array('nullable' => true)), 'error' => str('Motivo si falló.', array('nullable' => true))), array('entregado'));
+$s['EventoWebhook'] = obj(array('id' => str('Id único del evento (puede llegar repetido: use este campo para ignorar duplicados).', array('example' => 'evt_0123456789abcdef0123')),
+    'tipo' => array('type' => 'string', 'enum' => array_merge($eventosWh, array('webhook.prueba'))), 'entorno' => array('type' => 'string', 'enum' => array('prueba', 'produccion')), 'creado' => str('Fecha y hora (Lima).'),
+    'data' => array('allOf' => array(ref('Documento')), 'description' => 'El documento (sin datos del cliente final). En `webhook.prueba`: `{"mensaje": "..."}`.')), array('id', 'tipo', 'entorno', 'creado', 'data'));
+
+$whEj = array('id' => 'wh_0123456789abcdef0123', 'url' => 'https://midominio.com/webhooks/sunat', 'eventos' => $eventosWh, 'activo' => true, 'entorno' => 'prueba', 'creado' => '2026-11-12 10:00:00');
+$paths['/webhooks'] = array(
+    'get' => array('tags' => array('Webhooks'), 'operationId' => 'listarWebhooks', 'summary' => 'Listar webhooks', 'description' => 'Los webhooks de **este entorno**. Nunca incluye el secreto.', 'security' => $seg,
+        'responses' => array('200' => resp('Webhooks.', envelope(ref('ListadoWebhooks')), array('ok' => true, 'data' => array('items' => array($whEj)), 'request_id' => 'req_x')), '401' => err('R401'), '403' => err('R403'))),
+    'post' => array('tags' => array('Webhooks'), 'operationId' => 'crearWebhook', 'summary' => 'Registrar un webhook',
+        'description' => "La API avisará a esta URL cuando un documento llegue a un estado final (`documento.aceptado`, `documento.rechazado`, `documento.error`). Hasta 5 por entorno.\n\nLa respuesta incluye el **secreto** (`whsec_…`) **una sola vez**: úselo para verificar la firma de cada aviso. Antes de depender de él, pruebe el destino con `POST /webhooks/{id}/probar`.",
+        'security' => $seg, 'requestBody' => array('required' => true, 'content' => array('application/json' => array('schema' => ref('WebhookRequest'), 'examples' => array(
+            'todos' => array('summary' => 'Todos los eventos', 'value' => array('url' => 'https://midominio.com/webhooks/sunat')),
+            'solo_problemas' => array('summary' => 'Solo rechazos y errores', 'value' => array('url' => 'https://midominio.com/webhooks/sunat', 'eventos' => array('documento.rechazado', 'documento.error')))))))
+        , 'responses' => array('201' => resp('Webhook creado (con el secreto).', envelope(ref('Webhook')), array('ok' => true, 'data' => array_merge($whEj, array('secreto' => 'whsec_0123456789abcdef0123456789abcdef0123456789abcdef', 'aviso' => 'Guarde este secreto ahora: no se vuelve a mostrar.')), 'request_id' => 'req_x')),
+            '400' => err('R400'), '401' => err('R401'), '409' => err('R409'), '422' => err('R422'), '500' => err('R500'))));
+$paths['/webhooks/{id}'] = array('delete' => array('tags' => array('Webhooks'), 'operationId' => 'eliminarWebhook', 'summary' => 'Eliminar un webhook', 'description' => 'Elimina el webhook y sus entregas pendientes.', 'security' => $seg,
+    'parameters' => array(array('name' => 'id', 'in' => 'path', 'required' => true, 'schema' => array('type' => 'string', 'pattern' => '^wh_[a-f0-9]{20}$'), 'example' => 'wh_0123456789abcdef0123')),
+    'responses' => array('200' => resp('Eliminado.', envelope(obj(array('id' => str('Id.'), 'eliminado' => array('type' => 'boolean')))), array('ok' => true, 'data' => array('id' => 'wh_0123456789abcdef0123', 'eliminado' => true), 'request_id' => 'req_x')), '401' => err('R401'), '404' => err('R404'))));
+$paths['/webhooks/{id}/probar'] = array('post' => array('tags' => array('Webhooks'), 'operationId' => 'probarWebhook', 'summary' => 'Enviar un evento de prueba',
+    'description' => 'Envía **ahora** un evento `webhook.prueba` firmado (un solo intento, sin reintentos) y dice si su servidor respondió 2xx.', 'security' => $seg,
+    'parameters' => array(array('name' => 'id', 'in' => 'path', 'required' => true, 'schema' => array('type' => 'string', 'pattern' => '^wh_[a-f0-9]{20}$'), 'example' => 'wh_0123456789abcdef0123')),
+    'responses' => array('200' => resp('Resultado del envío de prueba (también cuando su servidor falla: mire `entregado`).', envelope(ref('PruebaWebhook')), array('ok' => true, 'data' => array('entrega' => 'ent_0123456789abcdef0123', 'entregado' => true, 'http' => 200, 'error' => null), 'request_id' => 'req_x')), '401' => err('R401'), '404' => err('R404'))));
+$paths['/webhooks/{id}/entregas'] = array('get' => array('tags' => array('Webhooks'), 'operationId' => 'listarEntregas', 'summary' => 'Historial de entregas de un webhook',
+    'description' => 'Las últimas entregas (más recientes primero), con su estado, intentos y el último error: sirve para depurar su servidor.', 'security' => $seg,
+    'parameters' => array(array('name' => 'id', 'in' => 'path', 'required' => true, 'schema' => array('type' => 'string', 'pattern' => '^wh_[a-f0-9]{20}$')),
+        array('name' => 'estado', 'in' => 'query', 'schema' => array('type' => 'string', 'enum' => array('pendiente', 'enviando', 'entregado', 'fallido')), 'description' => 'Filtra por estado.'),
+        array('name' => 'limit', 'in' => 'query', 'schema' => array('type' => 'integer', 'minimum' => 1, 'maximum' => 100, 'default' => 20))),
+    'responses' => array('200' => resp('Entregas.', envelope(ref('ListadoEntregas'))), '401' => err('R401'), '404' => err('R404'))));
+$paths['/webhooks/{id}/entregas/{entregaId}/reenviar'] = array('post' => array('tags' => array('Webhooks'), 'operationId' => 'reenviarEntrega', 'summary' => 'Reenviar una entrega',
+    'description' => 'Vuelve a poner en cola una entrega `fallido` o `entregado` (por ejemplo, después de arreglar su servidor). Se envía en el próximo ciclo del worker.', 'security' => $seg,
+    'parameters' => array(array('name' => 'id', 'in' => 'path', 'required' => true, 'schema' => array('type' => 'string', 'pattern' => '^wh_[a-f0-9]{20}$')),
+        array('name' => 'entregaId', 'in' => 'path', 'required' => true, 'schema' => array('type' => 'string', 'pattern' => '^ent_[a-f0-9]{20}$'))),
+    'responses' => array('200' => resp('En cola.', envelope(obj(array('id' => str('Entrega.'), 'estado' => str('pendiente'), 'aviso' => str('Nota.')))), array('ok' => true, 'data' => array('id' => 'ent_0123456789abcdef0123', 'estado' => 'pendiente', 'aviso' => 'Se enviara en el proximo ciclo del worker.'), 'request_id' => 'req_x')), '401' => err('R401'), '404' => err('R404'))));
+// ---------------- Plan, limites y cuota ----------------
+$s['Uso'] = obj(array(
+    'plan' => obj(array('nombre' => str('Nombre del plan (`sin_plan` si no tiene uno asignado: sin limites).', array('example' => 'Basico')),
+        'cuota_mensual' => int_('Documentos por mes. `null` = ilimitada; `0` = no incluye produccion.', array('nullable' => true, 'example' => 500)),
+        'limite_emisiones_por_minuto' => int_('Emisiones y consultas de ticket por minuto y por API key. `null` = sin limite.', array('nullable' => true, 'example' => 20)),
+        'limite_peticiones_por_minuto' => int_('Demas peticiones (consultas, series, webhooks...) por minuto y por API key. `null` = sin limite.', array('nullable' => true, 'example' => 120)),
+        'max_webhooks' => int_('Webhooks permitidos por entorno.', array('example' => 2))), array('nombre', 'max_webhooks')),
+    'periodo' => str('Mes de la cuota (AAAA-MM, hora de Lima).', array('example' => '2026-11')),
+    'documentos_usados' => int_('Documentos emitidos y aceptados este mes con llave `live`.', array('example' => 120)),
+    'documentos_restantes' => int_('Lo que le queda este mes (`null` si es ilimitada).', array('nullable' => true, 'example' => 380)),
+    'porcentaje' => num('Porcentaje de la cuota consumido.', array('nullable' => true, 'example' => 24)),
+    'reinicia' => str('Cuando se reinicia la cuota (primer dia del mes siguiente).', array('format' => 'date-time')),
+    'nota' => str('Que consume cuota.')), array('plan', 'periodo', 'documentos_usados', 'reinicia'));
+$paths['/uso'] = array('get' => array('tags' => array('Sistema'), 'operationId' => 'uso', 'summary' => 'Plan, consumo del mes y limites',
+    'description' => 'Su plan, cuantos documentos lleva este mes, cuantos le quedan y cuando se reinicia la cuota, y sus limites de velocidad. Consultar el uso es gratis y no consume cuota. **El consumo es el de produccion (`live`) aunque use una llave de prueba.**', 'security' => $seg,
+    'responses' => array('200' => resp('Plan y consumo.', envelope(ref('Uso')), array('ok' => true, 'data' => array('plan' => array('nombre' => 'Basico', 'cuota_mensual' => 500, 'limite_emisiones_por_minuto' => 20, 'limite_peticiones_por_minuto' => 120, 'max_webhooks' => 2),
+        'periodo' => '2026-11', 'documentos_usados' => 120, 'documentos_restantes' => 380, 'porcentaje' => 24, 'reinicia' => '2026-12-01T00:00:00-05:00', 'nota' => 'Solo los documentos emitidos y aceptados con una llave de produccion (live) consumen cuota.'), 'request_id' => 'req_x')),
+        '401' => err('R401'), '403' => err('R403'), '429' => err('R429'))));
+
+// Toda operacion autenticada puede responder 429; las emisiones de documentos que cuentan, ademas 402
+foreach ($paths as $rutaP => $opsP) {
+    foreach ($opsP as $metodoP => $opP) {
+        if (!empty($opP['security']) && !isset($paths[$rutaP][$metodoP]['responses']['429'])) {
+            $paths[$rutaP][$metodoP]['responses']['429'] = err('R429');
+        }
+    }
+}
+foreach (array('/comprobantes', '/retenciones', '/guias') as $rutaE) {
+    $paths[$rutaE]['post']['responses']['402'] = err('R402');
+}
 $descripcion = <<<'MD'
 API REST para emitir **comprobantes electrónicos a SUNAT** (facturas, boletas, notas, retenciones, guías, resúmenes y bajas) sin manejar XML, firmas ni servicios web de SUNAT: usted envía un JSON y recibe el resultado.
 
@@ -330,6 +413,44 @@ Garantías:
 
 **Consultar por serie y número** (por ejemplo, un cliente que recibió la boleta antes de que se enviara a SUNAT): `GET /comprobantes/{tipo}/{serie}/{numero}` responde `reservado`, `aceptado`, etc., o `404` si aún no existe.
 
+## Reintentos automáticos y webhooks
+**Reintentos.** Si envía un documento con `Idempotency-Key` y SUNAT (o el motor) falla por un problema **transitorio**, el documento queda en estado `error` conservando su número y la API **lo reenvía sola** con espera creciente: 1 min, 5 min, 15 min, 1 h, 3 h, 6 h y 12 h (8 intentos en total). Nunca se duplica: cada intento usa el mismo número, y si usted reintenta a la vez, solo uno de los dos envía. Un rechazo de SUNAT **no** se reintenta (hay que corregir los datos). Sin `Idempotency-Key` no hay reintentos automáticos: un reintento ajeno podría duplicar una venta que usted ya repitió con otro número.
+
+**Webhooks.** Registre una URL (`POST /webhooks`) y la API le avisa cuando un documento llega a un estado final, sin que usted tenga que consultar:
+
+| Evento | Cuándo |
+|---|---|
+| `documento.aceptado` | SUNAT aceptó el documento (también al resolverse un reintento o el ticket de una guía) |
+| `documento.rechazado` | SUNAT lo rechazó (`data.sunat` explica el motivo) |
+| `documento.error` | Se agotaron los reintentos (o el fallo no es reintentable): necesita atención |
+| `cuota.advertencia` | Su cuota mensual llegó al 80 % (`data`: plan, usados, restantes, porcentaje y fecha de reinicio; no es un documento) |
+| `cuota.agotada` | Su cuota mensual llegó al 100 % |
+
+Cada aviso es un `POST` JSON `{ id, tipo, entorno, creado, data: <Documento> }`. **No incluye datos del cliente final**, solo el estado y los enlaces. Su servidor debe responder **2xx** en menos de 10 segundos; si no, la API reintenta (1 min, 5 min, 15 min, 1 h, 3 h, 6 h, 12 h, 24 h) y después marca la entrega como `fallido` (puede reenviarla con `POST /webhooks/{id}/entregas/{id}/reenviar`). Como puede haber reintentos, **el mismo evento puede llegar más de una vez: use `id` del evento para ignorar repetidos**.
+
+**Verifique la firma** de cada aviso (cabecera `X-Webhook-Signature: t=<unix>,v1=<hex>`): `hex = HMAC_SHA256(secreto, "<unix>.<cuerpo exacto>")`. Rechace avisos con firma inválida o con `t` de hace más de 5 minutos.
+
+```php
+$cuerpo = file_get_contents('php://input');
+[$t, $v1] = [substr(explode(',', $_SERVER['HTTP_X_WEBHOOK_SIGNATURE'])[0], 2), substr(explode(',', $_SERVER['HTTP_X_WEBHOOK_SIGNATURE'])[1], 3)];
+$ok = abs(time() - $t) < 300 && hash_equals(hash_hmac('sha256', $t . '.' . $cuerpo, $SECRETO_WHSEC), $v1);
+```
+
+Por seguridad, la URL debe ser **pública** (no se aceptan direcciones privadas, locales ni de metadatos de nube), con **HTTPS en producción**, sin usuario/clave y sin redirecciones. El **secreto** (`whsec_…`) se muestra una sola vez al crear el webhook. Todo esto lo ejecuta un proceso aparte (`php bin/worker.php`); `GET /health` indica si está `activo`.
+
+## Planes, límites y cuota
+Su plan define dos cosas distintas:
+
+**1. Límite de velocidad (peticiones por minuto).** Protege el servicio y a SUNAT; no se factura. Se mide **por API key** y por minuto, en dos clases:
+- **Emisiones** (`POST /comprobantes`, `/resumenes`, `/bajas`, `/reversiones`, `/retenciones`, `/guias`, `/tickets`): son las caras, porque dependen de SUNAT.
+- **Demás peticiones** (consultas, series, webhooks…): baratas, con un límite mayor.
+
+Cada respuesta trae `X-RateLimit-Limit`, `X-RateLimit-Remaining` y `X-RateLimit-Reset` (segundos hasta el siguiente minuto). Si se excede: **`429`** con la cabecera **`Retry-After`** (segundos). Además existe un **tope global de emisiones** (para que ningún cliente degrade a los demás): si el servicio está saturado recibirá `429 servicio_saturado`; espere y reintente. **Un 429 no pierde nada**: reintente con la misma `Idempotency-Key`.
+
+**2. Cuota mensual de documentos (lo que contrata).** Consumen cuota solo los documentos **emitidos y aceptados por SUNAT** (o recibidos y en espera de su ticket, como una guía) **con llave `live`**: factura, boleta, notas, retención y guía. **No consumen:** las pruebas (llave `test`), las consultas, las reservas de números, los **rechazos** de SUNAT, los resúmenes/bajas/reversiones, ni repetir un documento con la misma `Idempotency-Key`. Si SUNAT rechaza una guía al resolver su ticket, la unidad se devuelve. La cuota es **mensual** (mes calendario, hora de Lima).
+
+Consulte su consumo con `GET /uso`; las respuestas de emisión (`live`) traen `X-Quota-Limit` y `X-Quota-Remaining`. Al **80 %** y al **100 %** recibe un aviso por webhook (`cuota.advertencia`, `cuota.agotada`). Al agotarse la cuota, emitir en producción responde **`402 cuota_agotada`** (con la fecha de reinicio; no se envía nada a SUNAT); las pruebas, las consultas y repetir documentos ya emitidos siguen funcionando.
+
 ## Flujos frecuentes
 - **Anular una factura** (menos de 7 días): `POST /bajas` → ticket → `POST /tickets`. O emita una **nota de crédito** (motivo `01`).
 - **Anular una boleta**: no existe baja para boletas; envíela en un **resumen diario** con `status` = 3 (`POST /resumenes`).
@@ -349,12 +470,17 @@ Garantías:
 | `certificado_requerido`, `certificado_vencido`, `certificado_invalido`, `llave_invalida`, `llave_no_corresponde`, `certificado_ruc_no_coincide`, `certificado_no_vigente` | 422 | Problema con el certificado digital |
 | `motor_no_disponible`, `motor_error` | 502 | El motor o SUNAT no respondieron: reintente |
 | `tiempo_agotado` | 504 | SUNAT no respondió a tiempo: reintente en unos minutos |
+| `limite_de_peticiones`, `servicio_saturado` | 429 | Demasiadas peticiones por minuto, o servicio saturado de emisiones: espere `Retry-After` segundos |
+| `cuota_agotada` | 402 | Cuota mensual de documentos agotada (o plan sin producción) |
 | `error_interno` | 500 | Error inesperado: cite el `request_id` |
 
 ## Limitaciones conocidas
 - Un número **reservado** que nunca se envía queda como hueco en la serie (todavía no hay una operación para liberarlo).
-- Sin límite de peticiones configurado todavía.
+- El límite de velocidad usa ventanas de un minuto: una ráfaga justo en el cambio de minuto puede acercarse al doble del límite durante unos segundos.
+- La cuota se comprueba antes de emitir: con muchas emisiones simultáneas justo al final de la cuota puede excederse por unos pocos documentos.
 - La consulta de tickets depende del servicio de SUNAT, que puede demorar o no responder (`504 tiempo_agotado`).
+- Los tickets de **guías** se consultan solos hasta resolverse; los de **resumen, baja y reversión** se siguen consultando con `POST /tickets` (todavía no se resuelven solos).
+- Los avisos se entregan **al menos una vez** (pueden repetirse) y sin garantía de orden entre documentos distintos.
 MD;
 
 $spec = array(
@@ -362,7 +488,7 @@ $spec = array(
     'info' => array('title' => 'API SUNAT - Facturación electrónica', 'version' => '1.0.0', 'description' => $descripcion),
     'servers' => array(array('url' => 'https://tu-dominio.com/API_SUNAT/v1', 'description' => 'Producción (reemplace por su dominio)'), array('url' => 'http://localhost/API_SUNAT/v1', 'description' => 'Local')),
     'tags' => array(array('name' => 'Sistema'), array('name' => 'Comprobantes'), array('name' => 'Resúmenes y bajas'), array('name' => 'Retenciones'), array('name' => 'Guías de remisión'),
-        array('name' => 'Consultas'), array('name' => 'Series y numeración'), array('name' => 'Historial'), array('name' => 'Certificado')),
+        array('name' => 'Consultas'), array('name' => 'Series y numeración'), array('name' => 'Webhooks'), array('name' => 'Historial'), array('name' => 'Certificado')),
     'paths' => $paths,
     'components' => array('securitySchemes' => array('bearerAuth' => array('type' => 'http', 'scheme' => 'bearer', 'bearerFormat' => 'sk_test_… / sk_live_…', 'description' => 'API key. `sk_test_` = pruebas (SUNAT beta), `sk_live_` = producción.')),
         'parameters' => $params, 'schemas' => $s, 'responses' => $resp),

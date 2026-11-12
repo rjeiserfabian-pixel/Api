@@ -9,19 +9,28 @@ class ApiError extends Exception
     public $status;
     public $codigo;
     public $detalles;
+    public $cabeceras;
 
-    public function __construct($status, $codigo, $mensaje, $detalles = null)
+    public function __construct($status, $codigo, $mensaje, $detalles = null, array $cabeceras = array())
     {
         parent::__construct($mensaje);
         $this->status = $status;
         $this->codigo = $codigo;
         $this->detalles = $detalles;
+        $this->cabeceras = $cabeceras;
     }
 }
 
 class Respuesta
 {
     private static $requestId;
+    private static $extra = array();
+
+    /** Cabecera que se agregara a la respuesta (limites, cuota...). */
+    public static function cabecera($nombre, $valor)
+    {
+        self::$extra[$nombre] = (string) $valor;
+    }
 
     public static function id()
     {
@@ -38,7 +47,7 @@ class Respuesta
         header('X-Request-Id: ' . self::id());
         header('X-Content-Type-Options: nosniff');
         header('Cache-Control: no-store');
-        foreach ($cabeceras as $k => $v) {
+        foreach (array_merge(self::$extra, $cabeceras) as $k => $v) {
             header($k . ': ' . $v);
         }
         $cuerpo['request_id'] = self::id();

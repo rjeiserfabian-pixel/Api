@@ -34,11 +34,26 @@ class Motor
         );
     }
 
-    private static function urlInterna()
+    /** Cuerpo que se envia al motor: el cliente nunca aporta credenciales; se agregan aqui (y NO se guardan en la base). */
+    public static function prepararCuerpo($script, array $cuerpo, array $empresaMotor)
+    {
+        $cuerpo['empresa'] = $empresaMotor;
+        if ($script === 'post_retencion.php') {
+            $cuerpo['emisor'] = $empresaMotor; // este endpoint del motor lee "emisor"
+        }
+        return $cuerpo;
+    }
+
+    public static function urlInterna()
     {
         $u = api_env('API_INTERNAL_URL');
         if ($u) {
             return rtrim($u, '/');
+        }
+        if (PHP_SAPI === 'cli') {
+            // El worker no tiene peticion web de la que deducir la carpeta: se usa el nombre de la carpeta del proyecto
+            // (ej. http://127.0.0.1/API_SUNAT). Si el servidor web la publica con otro nombre o puerto, defina API_INTERNAL_URL en .env.
+            return 'http://127.0.0.1/' . basename(dirname(__DIR__, 2));
         }
         // Nunca se usa el Host de la peticion (evita enviar credenciales a un host ajeno).
         $base = rtrim(dirname(dirname($_SERVER['SCRIPT_NAME'])), '/\\');
@@ -124,7 +139,17 @@ class Motor
         }
         $ticket = !empty($d['num_ticket']) ? $d['num_ticket'] : (!empty($d['estado_ticket']) ? $d['estado_ticket'] : null);
 
-        if (!empty($d['simulado'])) {
+        // Ticket de guia (GRE): "EN_PROCESO" (codigo 98) NO es un rechazo: SUNAT aun esta procesando
+        if (isset($d['estado']) && in_array($d['estado'], array('EN_PROCESO', 'ERROR_REST', 'DESCONOCIDO'), true)) {
+            if ($d['estado'] !== 'EN_PROCESO') {
+                error_log('[v1] ticket de guia sin resultado utilizable (' . $script . '): ' . substr($res['raw'], 0, 500));
+                throw new ApiError(502, 'motor_error', 'SUNAT no devolvio un resultado utilizable para el ticket (request ' . Respuesta::id() . '). Intente de nuevo mas tarde.');
+            }
+            $estado = 'pendiente';
+        } elseif ($codigo !== null && strpos($codigo, 'OAUTH_ERROR') === 0) {
+            error_log('[v1] error de autenticacion GRE (' . $script . '): ' . $desc);
+            throw new ApiError(502, 'motor_error', 'No se pudo autenticar ante SUNAT con las credenciales GRE de la empresa (request ' . Respuesta::id() . ').');
+        } elseif (!empty($d['simulado'])) {
             $estado = 'simulado';
         } elseif (isset($d['estado']) && $d['estado'] === 'ACEPTADO') {
             $estado = 'aceptado';
@@ -155,8 +180,13 @@ class Motor
             return $ruta;
         }
         $base = api_env('API_BASE_URL');
+        if (!$base && PHP_SAPI === 'cli') {
+            // El worker no tiene peticion web: en produccion defina API_BASE_URL (direccion publica, ej. https://midominio.com/API_SUNAT)
+            // para que los enlaces de los avisos y del historial apunten al dominio correcto.
+            $base = 'http://localhost/' . basename(dirname(__DIR__, 2));
+        }
         if (!$base) {
-            $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https');
+            $https =(!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https');
             $host = preg_match('/^[A-Za-z0-9.\-:\[\]]+$/', isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : '') ? $_SERVER['HTTP_HOST'] : 'localhost';
             $base = ($https ? 'https://' : 'http://') . $host . rtrim(dirname(dirname($_SERVER['SCRIPT_NAME'])), '/\\');
         }

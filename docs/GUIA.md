@@ -120,7 +120,116 @@ curl -s -X POST http://localhost/API_SUNAT/v1/comprobantes -H "Authorization: Be
 - El contador **solo sube**: `ultimo_numero` nunca baja ni queda por debajo de lo ya usado.
 - **Resúmenes, bajas y reversiones** usan un correlativo por día: omítalo y se asigna solo (también exige `Idempotency-Key`).
 - Cada **entorno** tiene sus propias series: registre también las de **producción** (con el `ultimo_numero` real) antes de emitir con una llave `live`.
-## 7. Certificado digital (producción)
+## 7. Reintentos automáticos y webhooks
+
+### Qué hace la API por usted
+- **Reintenta sola** los envíos que fallan por un problema transitorio de SUNAT o del motor (SUNAT caído, página de error, tiempo agotado). Solo si el envío llegó con **`Idempotency-Key`**. Espera creciente: 1 min, 5 min, 15 min, 1 h, 3 h, 6 h y 12 h. Cada intento usa **el mismo número**: nunca se duplica ni se salta uno. Un **rechazo** de SUNAT no se reintenta (hay que corregir los datos).
+- **Le avisa por webhook** cuando un documento queda `aceptado`, `rechazado` o `error` definitivo (sin que usted consulte).
+- **Consulta sola el ticket de las guías** hasta que SUNAT las resuelve. Los tickets de resumen, baja y reversión se siguen consultando con `POST /tickets`.
+
+Mientras un documento espera su reintento figura como `error` (con su número guardado). Si usted reintenta antes con la misma `Idempotency-Key`, se envía en ese momento y el reintento automático se cancela (nunca se envían los dos a la vez).
+
+### El worker (proceso en segundo plano)
+Todo lo anterior lo ejecuta `bin/worker.php`. **Sin el worker no hay reintentos ni avisos.**
+
+```bash
+php bin/worker.php              # queda corriendo (un ciclo cada 5 s)
+php bin/worker.php --una-vez    # un solo ciclo y termina (para cron / Programador de tareas)
+```
+
+| Sistema | Cómo dejarlo siempre encendido |
+|---|---|
+| Linux | `systemd` o `supervisor` con `php bin/worker.php`; o `cron` cada minuto con `--una-vez` |
+| Windows | Programador de tareas: «Al iniciar el sistema», acción `php.exe` con argumento `C:\ruta\bin\worker.php` |
+
+- `GET /health` informa `"worker": "activo"` (corrió hace menos de 60 s), `"detenido"` o `"sin_iniciar"`.
+- Registro: `logs/worker.log`. Para detenerlo con calma, cree el archivo `storage/worker.stop`.
+- Se pueden correr varios workers a la vez: cada documento y cada aviso lo toma uno solo.
+- En `.env`, en producción defina **`API_BASE_URL`** (dirección pública, p. ej. `https://midominio.com/API_SUNAT`): los enlaces a XML/CDR que genera el worker y viajan en los avisos la usan. Si el servidor web local no responde en `http://127.0.0.1/<carpeta>`, defina también `API_INTERNAL_URL`. El worker lo comprueba al arrancar y avisa.
+
+### Webhooks
+```bash
+# 1) Registrar (la respuesta trae el secreto UNA sola vez: guárdelo)
+curl -s -X POST http://localhost/API_SUNAT/v1/webhooks -H "Authorization: Bearer sk_test_XXXX" -H "Content-Type: application/json" \
+  -d '{"url":"https://midominio.com/webhooks/sunat","eventos":["documento.aceptado","documento.rechazado","documento.error"]}'
+
+# 2) Probar que su servidor responde (envía un evento "webhook.prueba" firmado)
+curl -s -X POST http://localhost/API_SUNAT/v1/webhooks/wh_XXXX/probar -H "Authorization: Bearer sk_test_XXXX"
+
+# 3) Si algo falla, ver el historial de entregas y el motivo
+curl -s http://localhost/API_SUNAT/v1/webhooks/wh_XXXX/entregas -H "Authorization: Bearer sk_test_XXXX"
+```
+
+Cada aviso es un `POST` con este cuerpo (no incluye datos del cliente final):
+```json
+{ "id": "evt_…", "tipo": "documento.aceptado", "entorno": "prueba", "creado": "2026-11-12 10:00:00",
+  "data": { "id": "doc_…", "tipo": "03", "serie": "B001", "numero": "00000152", "estado": "aceptado",
+            "sunat": { "codigo": "0", "descripcion": "…" }, "archivos": { "xml": "…", "cdr": "…" } } }
+```
+
+**Su servidor debe:** (1) verificar la firma, (2) responder **2xx en menos de 10 s**, (3) ignorar eventos repetidos por su `id` (si no recibimos su 2xx, reintentamos: 1 min, 5 min, 15 min, 1 h, 3 h, 6 h, 12 h y 24 h; después queda `fallido` y puede reenviarlo con `POST /webhooks/{id}/entregas/{id}/reenviar`).
+
+**Verificar la firma** (`X-Webhook-Signature: t=<unix>,v1=<hex>`, con `hex = HMAC_SHA256(secreto, "<unix>.<cuerpo exacto>")`):
+
+```php
+$cuerpo = file_get_contents('php://input');
+$partes = explode(',', $_SERVER['HTTP_X_WEBHOOK_SIGNATURE']);
+$t = substr($partes[0], 2); $v1 = substr($partes[1], 3);
+$valida = abs(time() - (int) $t) < 300 && hash_equals(hash_hmac('sha256', $t . '.' . $cuerpo, $SECRETO), $v1);
+if (!$valida) { http_response_code(400); exit; }
+```
+```js
+// Node.js (Express: use el cuerpo CRUDO, p. ej. express.raw({type: 'application/json'}))
+const crypto = require('crypto');
+const [t, v1] = req.get('X-Webhook-Signature').split(',').map(x => x.split('=')[1]);
+const esperado = crypto.createHmac('sha256', SECRETO).update(t + '.' + req.body).digest('hex');
+const valida = Math.abs(Date.now() / 1000 - t) < 300 && crypto.timingSafeEqual(Buffer.from(esperado), Buffer.from(v1));
+```
+
+**Seguridad de la URL:** debe ser pública (no se aceptan direcciones privadas, locales ni de metadatos de nube; se vuelve a comprobar al enviar), **HTTPS en producción**, sin usuario/clave y sin redirecciones. Para pruebas locales, el administrador puede poner `WEBHOOKS_PERMITIR_REDES_PRIVADAS=1` en `.env` (**solo desarrollo**).
+## 8. Planes, límites de velocidad y cuota
+
+Cada empresa tiene un **plan** que define dos cosas distintas.
+
+### Límite de velocidad (peticiones por minuto) — protege el servicio
+Por **API key** y por minuto, en dos clases: **emisiones** (`POST /comprobantes`, `/resumenes`, `/bajas`, `/reversiones`, `/retenciones`, `/guias`, `/tickets`; dependen de SUNAT) y **demás peticiones** (consultas, series, webhooks…; baratas). Además hay un **tope global de emisiones** (`LIMITE_GLOBAL_SUNAT_MIN` en `.env`, por defecto 150/min; `0` = sin tope) para que un cliente no degrade a los demás.
+
+Cada respuesta trae `X-RateLimit-Limit`, `X-RateLimit-Remaining` y `X-RateLimit-Reset`. Si se excede: **`429`** con **`Retry-After`** (segundos): `limite_de_peticiones` (su límite) o `servicio_saturado` (tope global). Reintente tras esa espera, con la misma `Idempotency-Key`.
+
+### Cuota mensual de documentos — lo que se vende
+Consumen cuota solo los documentos **emitidos y aceptados** (o recibidos por SUNAT en espera de ticket, como una guía) con llave **`live`**: factura, boleta, notas, retención y guía. **No consumen:** pruebas (`test`), consultas, reservas de números, rechazos de SUNAT, resúmenes/bajas/reversiones ni repetir un documento con la misma `Idempotency-Key`. Es **mensual** (mes calendario, hora de Lima).
+
+- `GET /uso`: plan, documentos usados y restantes, porcentaje y fecha de reinicio.
+- Las respuestas de emisión `live` traen `X-Quota-Limit` y `X-Quota-Remaining`.
+- Al **80 %** y al **100 %**: aviso por webhook (`cuota.advertencia`, `cuota.agotada`).
+- Al agotarse: `402 cuota_agotada` (con la fecha de reinicio) **antes de enviar nada a SUNAT**. Las pruebas, las consultas y repetir documentos ya emitidos siguen funcionando.
+
+### Valores recomendados (medidos en este servidor)
+Una emisión real con SUNAT beta tardó **0,76 s en promedio** (mediana 0,56 s) y las consultas simples se atienden a ~**119 por segundo**; pero SUNAT empezó a rechazar conexiones con ~8 envíos simultáneos. El cuello de botella es SUNAT, no el servidor: por eso las emisiones tienen un límite mucho más bajo que las consultas.
+
+| Plan | Cuota/mes | Emisiones/min | Peticiones/min | Webhooks |
+|---|---|---|---|---|
+| Prueba | 0 (solo llave `test`) | 10 | 30 | 1 |
+| Basico | 500 | 20 | 120 | 2 |
+| Pro | 5 000 | 60 | 300 | 5 |
+| Empresa | 50 000 | 120 | 600 | 5 |
+
+Son un punto de partida **conservador**: SUNAT de producción puede ser más lento que el beta. Ajústelos con datos reales (`plan:crear` los cambia al instante) y suba el tope global solo cuando mida que SUNAT lo tolera.
+
+```bash
+php bin/admin.php plan:sembrar                                   # crea los 4 planes de arriba
+php bin/admin.php plan:crear --nombre=Basico --cuota=800         # cambia un valor (los demas se conservan)
+php bin/admin.php plan:crear --nombre=Aliado --cuota=ilimitada --sunat-min=ilimitado --general-min=ilimitado
+php bin/admin.php empresa:plan --ruc=20123456789 --plan=Basico   # asignar ("--plan=ninguno" quita todo limite)
+php bin/admin.php plan:listar
+php bin/admin.php uso:ver [--ruc=20123456789]                    # consumo del mes
+```
+Una empresa **sin plan no tiene ningún límite** (compatibilidad): asigne un plan a cada cliente.
+
+### Qué debe hacer el cliente ante un 429 o un 402
+- **429:** esperar `Retry-After` segundos y reintentar (con la misma `Idempotency-Key`); no insistir en bucle.
+- **402:** avisar al usuario (la respuesta trae la fecha de reinicio) o contratar un plan mayor. No reintentar.
+## 9. Certificado digital (producción)
 
 Cada empresa firma con **su propio certificado**. Para emitir en producción, regístrelo con una llave `live`:
 
@@ -131,7 +240,7 @@ php -r 'echo json_encode(["pfx_base64"=>base64_encode(file_get_contents("empresa
 
 Se valida que sea RSA, que la llave corresponda al certificado, que esté vigente y que contenga el RUC de la empresa. La llave privada se guarda cifrada. `GET /certificado` o `GET /me` muestran los días restantes. Sin certificado de producción, una llave `live` responde `422 certificado_requerido` (no se envía nada).
 
-## 8. Probar que todo funciona
+## 10. Probar que todo funciona
 
 ```bash
 # Prueba real: ejecuta los ejemplos contra la API y verifica los resultados (usa SUNAT beta)
@@ -139,13 +248,19 @@ php docs/probar.php --key=sk_test_XXXXXXXX [--base=http://localhost/API_SUNAT/v1
 
 # Prueba de la numeración (series, reservas, concurrencia, reintentos, sincronización): usa series de nombre aleatorio
 php docs/probar_numeracion.php --key=sk_test_XXXXXXXX
+
+# Prueba de reintentos automáticos y webhooks: arranca un motor falso y un receptor de avisos, no envía nada a SUNAT
+php docs/probar_reintentos.php --key=sk_test_XXXXXXXX
+
+# Prueba de límites, tope global y cuota mensual: crea una empresa de laboratorio (se borra sola) y usa un motor falso
+php docs/probar_limites.php
 ```
 
 Rechaza llaves `sk_live_` a propósito. Úsela **después de cada cambio**: si todo sale `[OK]`, la API sigue funcionando.
 
-También puede importar `postman/API_SUNAT_v1.postman_collection.json` en Postman (37 peticiones con tests automáticos): ponga su llave de prueba en la variable `api_key` y ejecute primero «00 Iniciar tanda de numeros».
+También puede importar `postman/API_SUNAT_v1.postman_collection.json` en Postman (44 peticiones con tests automáticos): ponga su llave de prueba en la variable `api_key` y ejecute primero «00 Iniciar tanda de numeros».
 
-## 9. Administración (solo línea de comandos)
+## 11. Administración (solo línea de comandos)
 
 ```bash
 php bin/admin.php init                       # prepara base de datos y claves (una vez)
@@ -156,6 +271,8 @@ php bin/admin.php cert:subir --ruc=… --entorno=live --pfx=archivo.pfx --pass=�
 php bin/admin.php cert:ver
 php bin/admin.php serie:crear --ruc=… --entorno=test|live --tipo=03 --serie=B001 [--modo=cliente|api] [--ultimo=150]
 php bin/admin.php serie:listar [--ruc=…] [--entorno=test|live]
+php bin/worker.php [--una-vez]                # reintentos y webhooks (dejarlo siempre encendido)
+php bin/admin.php plan:sembrar | plan:crear | plan:listar | empresa:plan | uso:ver   # planes, limites y cuota (seccion 8)
 ```
 
 **Respalde `APP_KEY`** (archivo `.env`): sin ella no se pueden descifrar las claves SOL ni las llaves de certificados guardadas.
@@ -181,7 +298,7 @@ php docs/probar.php --key=sk_test_XXXX && php docs/probar_numeracion.php --key=s
 
 Respalde la base y `APP_KEY` juntas: los secretos guardados solo se descifran con esa llave.
 
-## 10. Regenerar la documentación
+## 12. Regenerar la documentación
 
 Los ejemplos viven en `docs/ejemplos.php` (única fuente). Si cambia algo:
 
@@ -191,9 +308,14 @@ php postman/gen_v1.php            # colección de Postman
 php docs/probar.php --key=sk_test_…   # confirma que los ejemplos siguen funcionando
 ```
 
-## 11. Limitaciones conocidas
+## 13. Limitaciones conocidas
 
 - Un número **reservado** que nunca se envía queda como hueco en la serie (todavía no hay una operación para liberarlo).
+- Los tickets de **resumen, baja y reversión** no se resuelven solos (solo los de guías): se consultan con `POST /tickets`.
+- Los avisos se entregan **al menos una vez** (pueden repetirse; ignore los repetidos por `id`).
+- Los reintentos automáticos exigen que el worker esté encendido y que el envío haya llegado con `Idempotency-Key`.
+- El límite de velocidad usa ventanas de un minuto (una ráfaga justo en el cambio de minuto puede acercarse al doble durante unos segundos) y la cuota se comprueba antes de emitir (con muchas emisiones simultáneas al final de la cuota puede excederse por unos pocos documentos).
+- Todavía no hay cobro por excedente: al agotarse la cuota se bloquea.
 - Sin límite de peticiones configurado todavía.
 - La consulta de tickets depende de SUNAT y puede devolver `504 tiempo_agotado`: reintente.
 - Un certificado por empresa y entorno; sin aviso automático de vencimiento (se ve en `/me`).

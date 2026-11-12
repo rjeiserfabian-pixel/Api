@@ -54,6 +54,7 @@ $carpetas = array(
     array('name' => '1. Sistema', 'item' => array(
         pedir('00 Iniciar tanda de numeros (ejecutar primero)', 'GET', '/health', null, array('auth' => false, 'desc' => 'Genera fecha, numeros y correlativos nuevos para esta tanda. Ejecute esta peticion al empezar para no repetir numeros de comprobantes.')),
         pedir('GET /me', 'GET', '/me', null, array('desc' => 'Empresa, entorno (debe decir "prueba" con llave sk_test) y certificado.')),
+        pedir('GET /uso (plan, cuota y limites)', 'GET', '/uso', null, array('extra' => array('pm.test("informa el plan y el consumo del mes", () => pm.expect(j.data.documentos_usados).to.be.a("number"));'), 'desc' => 'Su plan, documentos usados este mes (llave live), restantes, fecha de reinicio y limites por minuto. Consultarlo es gratis.')),
         pedir('GET /health (sin autenticacion)', 'GET', '/health', null, array('auth' => false)),
     )),
     array('name' => '2. Comprobantes', 'item' => array(
@@ -104,6 +105,19 @@ $carpetas = array(
         pedir('Listar solo facturas aceptadas', 'GET', '/documentos?tipo=01&estado=aceptado&limit=5', null),
         pedir('Detalle del documento ({{doc_id}})', 'GET', '/documentos/{{doc_id}}', null, array('desc' => 'Use el id devuelto al emitir (se guarda solo tras emitir la factura).')),
     )),
+    array('name' => '7b. Webhooks (avisos automáticos)', 'item' => array(
+        pedir('Registrar un webhook', 'POST', '/webhooks', array('url' => '{{webhook_url}}', 'eventos' => array('documento.aceptado', 'documento.rechazado', 'documento.error')), array('status' => 201, 'guardar' => array('webhook_id', 'id'),
+            'extra' => array('pm.test("el secreto se entrega UNA vez", () => pm.expect(j.data.secreto).to.be.a("string"));'),
+            'desc' => 'La URL debe ser publica (HTTPS en produccion). La respuesta trae el secreto whsec_... una sola vez: guardelo para verificar la firma de los avisos. Cambie la variable webhook_url por su servidor.')),
+        pedir('Listar webhooks (no muestra el secreto)', 'GET', '/webhooks', null, array('status' => 200)),
+        pedir('Enviar un evento de prueba', 'POST', '/webhooks/{{webhook_id}}/probar', null, array('status' => 200,
+            'extra' => array('pm.test("dice si su servidor respondio 2xx", () => pm.expect(j.data.entregado).to.be.a("boolean"));'),
+            'desc' => 'Envia ahora un evento webhook.prueba firmado. Con la URL de ejemplo (example.com) dara entregado=false: es lo esperado; con su servidor debe dar true.')),
+        pedir('Historial de entregas', 'GET', '/webhooks/{{webhook_id}}/entregas', null, array('status' => 200)),
+        pedir('Destino inseguro (red local) se rechaza', 'POST', '/webhooks', array('url' => 'http://169.254.169.254/latest/meta-data/'), array('status' => 422, 'ok' => false, 'code' => 'webhook_url_invalida',
+            'desc' => 'Proteccion SSRF: no se aceptan direcciones privadas, locales ni de metadatos de nube.')),
+        pedir('Eliminar el webhook', 'DELETE', '/webhooks/{{webhook_id}}', null, array('status' => 200)),
+    )),
     array('name' => '8. Certificado digital', 'item' => array(
         pedir('Estado del certificado', 'GET', '/certificado', null, array('status_alt' => array(200, 404))),
         pedir('Registrar certificado (PFX)', 'POST', '/certificado', $c['certificado_pfx'], array('status_alt' => array(200, 422), 'desc' => 'Ponga el PFX en base64 en {{pfx_base64}} y su contrasena en el cuerpo. Con sk_test registra el de pruebas; con sk_live el de produccion.')),
@@ -132,7 +146,7 @@ $iniciar = array(
 
 $vars = array();
 foreach (array('base_url' => 'http://localhost/API_SUNAT/v1', 'api_key' => '', 'lote' => '', 'fecha' => '', 'fecha_venc' => '', 'fecha_compacta' => '', 'numero' => '', 'numero_credito' => '', 'numero_boleta' => '',
-    'numero_nota' => '', 'numero_retencion' => '', 'numero_guia' => '', 'correlativo' => '', 'idem' => '', 'serie_auto' => '', 'idem_auto' => '', 'reserva_numero' => '', 'ticket' => '', 'ticket_guia' => '', 'pfx_base64' => '', 'doc_id' => '') as $k => $v) {
+    'numero_nota' => '', 'numero_retencion' => '', 'numero_guia' => '', 'correlativo' => '', 'idem' => '', 'webhook_url' => 'https://example.com/webhooks/sunat', 'webhook_id' => '', 'serie_auto' => '', 'idem_auto' => '', 'reserva_numero' => '', 'ticket' => '', 'ticket_guia' => '', 'pfx_base64' => '', 'doc_id' => '') as $k => $v) {
     $vars[] = array('key' => $k, 'value' => $v);
 }
 $col = array(

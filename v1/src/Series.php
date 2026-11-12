@@ -187,7 +187,7 @@ class Series
                 throw new ApiError(409, 'documento_duplicado', "Ya existe $tipo $serie-$numero con estado " . $ult['estado'] . '.', array('id' => $ult['uid']));
             }
             if ($ult['estado'] === 'procesando') {
-                if (strtotime($ult['creado']) > time() - 300) {
+                if (strtotime($ult['actualizado'] ?: $ult['creado']) > time() - 300) {
                     throw new ApiError(409, 'documento_en_proceso', "$tipo $serie-$numero se esta enviando (o una peticion anterior se interrumpio). Reintente con la misma Idempotency-Key o espere unos minutos.", array('id' => $ult['uid']));
                 }
                 $reutilizable = $ult;

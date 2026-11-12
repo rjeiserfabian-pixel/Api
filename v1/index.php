@@ -4,6 +4,7 @@
  *
  *   GET  /v1/health                    estado del servicio (sin autenticacion)
  *   GET  /v1/me                        empresa y entorno de la API key
+ *   GET  /v1/uso                       plan, cuota mensual y limites de velocidad
  *   POST /v1/comprobantes              factura (01), boleta (03), nota de credito (07), nota de debito (08)
  *   GET  /v1/series, POST /v1/series   series y correlativos (numeracion sincronizada con el sistema comercial)
  *   POST /v1/series/reservar           reserva numeros para usarlos antes de enviar a SUNAT
@@ -15,11 +16,12 @@
  *   POST /v1/guias                     guia de remision remitente (09)
  *   POST /v1/tickets                   consulta de ticket (guia | resumen | baja)
  *   GET  /v1/documentos[?tipo=&estado=&serie=&limit=&offset=]
+ *   GET|POST /v1/webhooks, DELETE /v1/webhooks/{id}, POST /v1/webhooks/{id}/probar, GET /v1/webhooks/{id}/entregas, POST .../entregas/{id}/reenviar
  *   GET  /v1/documentos/{id}
  */
 require_once __DIR__ . '/../libraries/env.php';
 require_once __DIR__ . '/../libraries/errores.php';
-foreach (array('Respuesta', 'Db', 'Crypto', 'Auth', 'Validador', 'Motor', 'Series', 'Documentos') as $c) {
+foreach (array('Respuesta', 'Db', 'Crypto', 'Auth', 'Validador', 'Motor', 'Series', 'Planes', 'Documentos') as $c) {
     require_once __DIR__ . '/src/' . $c . '.php';
 }
 date_default_timezone_set('America/Lima');
@@ -27,7 +29,7 @@ date_default_timezone_set('America/Lima');
 
 set_exception_handler(function ($e) {
     if ($e instanceof ApiError) {
-        Respuesta::error($e->status, $e->codigo, $e->getMessage(), $e->detalles);
+        Respuesta::error($e->status, $e->codigo, $e->getMessage(), $e->detalles, $e->cabeceras);
     }
     error_log('[v1] ' . get_class($e) . ': ' . $e->getMessage() . ' en ' . $e->getFile() . ':' . $e->getLine());
     Respuesta::error(500, 'error_interno', 'Error interno del servidor. Cite el request_id al pedir soporte.');
@@ -46,20 +48,39 @@ if ($metodo === 'OPTIONS') {
 }
 
 if ($ruta === '/health') {
-    Respuesta::ok(array('servicio' => 'api-sunat', 'version' => 'v1', 'hora' => date('c')));
+    $latido = dirname(__DIR__) . '/storage/worker.heartbeat';
+    $worker = 'sin_iniciar'; // activo: corrio hace menos de 60 s; detenido: dejo de correr
+    if (is_file($latido)) {
+        $worker = (time() - (int) @file_get_contents($latido)) <= 60 ? 'activo' : 'detenido';
+    }
+    Respuesta::ok(array('servicio' => 'api-sunat', 'version' => 'v1', 'hora' => date('c'), 'worker' => $worker));
 }
 
 $permitidos = array(
-    '/me' => 'GET', '/comprobantes' => 'POST', '/resumenes' => 'POST', '/bajas' => 'POST',
+    '/me' => 'GET', '/uso' => 'GET', '/comprobantes' => 'POST', '/resumenes' => 'POST', '/bajas' => 'POST',
     '/reversiones' => 'POST', '/retenciones' => 'POST', '/guias' => 'POST', '/tickets' => 'POST', '/documentos' => 'GET', '/certificado' => 'GET|POST',
-    '/series' => 'GET|POST', '/series/reservar' => 'POST',
+    '/series' => 'GET|POST', '/series/reservar' => 'POST', '/webhooks' => 'GET|POST',
 );
 $esDetalle = preg_match('#^/documentos/(doc_[a-f0-9]{20})$#', $ruta, $m);
 $esBusqueda = preg_match('#^/comprobantes/(01|03|07|08|20|09)/([A-Za-z0-9]{4})/(\d{1,8})$#', $ruta, $mb);
-if (!$esDetalle && !$esBusqueda && !isset($permitidos[$ruta])) {
+$rutasWebhook = array(
+    array('#^/webhooks/(wh_[a-f0-9]{20})$#', 'DELETE', 'eliminar'),
+    array('#^/webhooks/(wh_[a-f0-9]{20})/probar$#', 'POST', 'probar'),
+    array('#^/webhooks/(wh_[a-f0-9]{20})/entregas$#', 'GET', 'entregas'),
+    array('#^/webhooks/(wh_[a-f0-9]{20})/entregas/(ent_[a-f0-9]{20})/reenviar$#', 'POST', 'reenviar'),
+);
+$esWebhook = null;
+$mw = array();
+foreach ($rutasWebhook as $rw) {
+    if (preg_match($rw[0], $ruta, $mw)) {
+        $esWebhook = $rw;
+        break;
+    }
+}
+if (!$esDetalle && !$esBusqueda && !$esWebhook && !isset($permitidos[$ruta])) {
     Respuesta::error(404, 'ruta_no_encontrada', "No existe $metodo /v1$ruta");
 }
-$esperado = ($esDetalle || $esBusqueda) ? 'GET' : $permitidos[$ruta];
+$esperado = $esWebhook ? $esWebhook[1] : (($esDetalle || $esBusqueda) ? 'GET' : $permitidos[$ruta]);
 if (!in_array($metodo, explode('|', $esperado), true)) {
     $lista = str_replace('|', ', ', $esperado);
     Respuesta::error(405, 'metodo_no_permitido', "Use $lista en /v1$ruta", null, array('Allow' => $lista));
@@ -69,6 +90,10 @@ $ctx = Auth::autenticar();
 $empresa = $ctx['empresa'];
 Db::asegurarEsquema(); // tras actualizar el codigo, crea lo que falte (tablas o columnas nuevas)
 
+// Limite de velocidad del plan: "sunat" (emitir y consultar tickets; caras) o "general" (todo lo demas)
+$esEmision = $metodo === 'POST' && in_array($ruta, array('/comprobantes', '/resumenes', '/bajas', '/reversiones', '/retenciones', '/guias', '/tickets'), true);
+Planes::limitar($ctx, $esEmision ? 'sunat' : 'general');
+
 if ($ruta === '/me') {
     Respuesta::ok(array(
         'ruc' => $empresa['ruc'], 'razon_social' => $empresa['razon_social'],
@@ -77,6 +102,9 @@ if ($ruta === '/me') {
         'credenciales_sol' => !empty($empresa['sol_usuario']), 'credenciales_gre' => !empty($empresa['gre_client_id']),
         'certificado' => Certificados::estado($empresa['id'], $ctx['key']['entorno']),
     ));
+}
+if ($ruta === '/uso') {
+    Respuesta::ok(Planes::uso($ctx));
 }
 if ($ruta === '/certificado' && $metodo === 'GET') {
     $e = Certificados::estado($empresa['id'], $ctx['key']['entorno']);
@@ -91,6 +119,22 @@ if ($esDetalle) {
 if ($esBusqueda) {
     Respuesta::ok(Documentos::buscar($ctx, $mb[1], strtoupper($mb[2]), $mb[3]));
 }
+if ($esWebhook) {
+    switch ($esWebhook[2]) {
+        case 'eliminar':
+            Webhooks::eliminar($ctx, $mw[1]);
+            Respuesta::ok(array('id' => $mw[1], 'eliminado' => true));
+        case 'probar':
+            Respuesta::ok(Webhooks::probar($ctx, $mw[1]));
+        case 'entregas':
+            Respuesta::ok(array('items' => Webhooks::entregas($ctx, $mw[1])));
+        case 'reenviar':
+            Respuesta::ok(Webhooks::reenviar($ctx, $mw[1], $mw[2]));
+    }
+}
+if ($ruta === '/webhooks' && $metodo === 'GET') {
+    Respuesta::ok(array('items' => Webhooks::listar($ctx)));
+}
 if ($ruta === '/series' && $metodo === 'GET') {
     Respuesta::ok(array('items' => Series::listar($ctx)));
 }
@@ -103,6 +147,12 @@ $b = Documentos::cuerpo();
 unset($b['empresa']); // las credenciales y datos del emisor salen de la base, no del cliente
 
 switch ($ruta) {
+    case '/webhooks':
+        $v = new Validador();
+        $v->requerido($b, 'url');
+        $v->lanzarSiHayErrores();
+        Respuesta::ok(Webhooks::crear($ctx, $b), 201);
+
     case '/series':
         $v = new Validador();
         $v->requerido($b, 'tipo');
@@ -295,7 +345,6 @@ switch ($ruta) {
         if ($auto) {
             Series::exigirAutomatica($ctx, '20', (string) $b['retencion']['serie']);
         }
-        $b['emisor'] = Motor::empresa($empresa, $ctx['key']['entorno']);
         $d = Documentos::emitir($ctx, 'post_retencion.php', $b, '20', $b['retencion']['serie'], $auto ? null : $b['retencion']['numero'],
             function (array &$cu, $num) {
                 $cu['retencion']['numero'] = $num;
@@ -388,4 +437,5 @@ switch ($ruta) {
         break;
 }
 
+Planes::cabecerasCuota($ctx);
 Respuesta::ok($d, 201);

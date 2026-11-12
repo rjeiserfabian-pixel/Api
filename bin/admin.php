@@ -15,6 +15,11 @@
  *   php bin/admin.php cert:ver [--ruc=20123456789]
  *   php bin/admin.php serie:crear --ruc=20123456789 --entorno=test|live --tipo=03 --serie=B001 [--modo=cliente|api] [--ultimo=150]
  *   php bin/admin.php serie:listar [--ruc=20123456789] [--entorno=test|live]
+ *   php bin/admin.php plan:sembrar                      # crea los 4 planes recomendados (Prueba, Basico, Pro, Empresa)
+ *   php bin/admin.php plan:crear --nombre=Basico [--cuota=500|ilimitada|0] [--sunat-min=20|ilimitado] [--general-min=120|ilimitado] [--webhooks=2]
+ *   php bin/admin.php plan:listar
+ *   php bin/admin.php empresa:plan --ruc=20123456789 --plan=Basico|ninguno
+ *   php bin/admin.php uso:ver [--ruc=20123456789]       # consumo del mes (solo llaves live)
  *   php bin/admin.php db:copiar --dsn="pgsql:host=127.0.0.1;port=5432;dbname=api_sunat" --user=... --pass=...
  *        Copia TODOS los datos de la base actual (la de DB_DSN o SQLite) a otra base VACIA (ej. PostgreSQL).
  *        No modifica el origen. Despues, cambie DB_DSN/DB_USER/DB_PASS en .env para usar la nueva base.
@@ -25,7 +30,7 @@ if (PHP_SAPI !== 'cli') {
 }
 $raiz = dirname(__DIR__);
 require_once $raiz . '/libraries/env.php';
-foreach (array('Respuesta', 'Db', 'Crypto', 'Auth', 'Series') as $c) {
+foreach (array('Respuesta', 'Db', 'Crypto', 'Auth', 'Series', 'Planes') as $c) {
     require_once $raiz . '/v1/src/' . $c . '.php';
 }
 date_default_timezone_set('America/Lima');
@@ -218,7 +223,7 @@ switch ($cmd) {
 
     case 'db:copiar':
         exigir($o, array('dsn'));
-        $tablas = array('empresas', 'api_keys', 'certificados', 'series', 'documentos');
+        $tablas = array('planes', 'empresas', 'api_keys', 'certificados', 'series', 'documentos', 'uso', 'webhooks', 'eventos', 'entregas'); // (limites es transitoria: no se copia)
         $origen = Db::pdo();
         $motorOrigen = $origen->getAttribute(PDO::ATTR_DRIVER_NAME);
         Db::asegurarEsquema();
@@ -278,8 +283,98 @@ switch ($cmd) {
         if (!$bien) {
             salir('La verificacion de conteos fallo.');
         }
-        echo "Copia verificada: los conteos coinciden en las 5 tablas." . PHP_EOL
+        echo "Copia verificada: los conteos coinciden en las 10 tablas." . PHP_EOL
             . "Para usar la nueva base, ponga en .env:  DB_DSN=" . $o['dsn'] . "  DB_USER=...  DB_PASS=..." . PHP_EOL;
+        break;
+
+    case 'plan:sembrar':
+        Db::asegurarEsquema();
+        foreach (Planes::$recomendados as $p) {
+            if (Db::uno('SELECT id FROM planes WHERE nombre = ?', array($p['nombre']))) {
+                echo "  ya existe: {$p['nombre']}" . PHP_EOL;
+                continue;
+            }
+            Db::ejecutar('INSERT INTO planes (nombre, cuota_mensual, limite_sunat_min, limite_general_min, max_webhooks, activo, creado) VALUES (?,?,?,?,?,1,?)',
+                array($p['nombre'], $p['cuota_mensual'], $p['limite_sunat_min'], $p['limite_general_min'], $p['max_webhooks'], Db::ahora()));
+            echo "  creado: {$p['nombre']}" . PHP_EOL;
+        }
+        echo "Listo. Vea los planes con: php bin/admin.php plan:listar" . PHP_EOL;
+        break;
+
+    case 'plan:crear':
+        exigir($o, array('nombre'));
+        Db::asegurarEsquema();
+        $num = function ($clave, $defecto) use ($o) {
+            if (!isset($o[$clave])) {
+                return $defecto;
+            }
+            if (in_array(strtolower($o[$clave]), array('ilimitada', 'ilimitado', 'null'), true)) {
+                return null;
+            }
+            if (!ctype_digit($o[$clave])) {
+                salir("--$clave debe ser un numero entero (o 'ilimitado').");
+            }
+            return (int) $o[$clave];
+        };
+        $existe = Db::uno('SELECT * FROM planes WHERE nombre = ?', array($o['nombre']));
+        $cuota = $num('cuota', $existe ? ($existe['cuota_mensual'] === null ? null : (int) $existe['cuota_mensual']) : null);
+        $sunat = $num('sunat-min', $existe ? ($existe['limite_sunat_min'] === null ? null : (int) $existe['limite_sunat_min']) : 20);
+        $gral = $num('general-min', $existe ? ($existe['limite_general_min'] === null ? null : (int) $existe['limite_general_min']) : 120);
+        $wh = $num('webhooks', $existe ? (int) $existe['max_webhooks'] : 5);
+        if ($wh === null || $wh < 1) {
+            salir('--webhooks debe ser un entero de 1 en adelante.');
+        }
+        if ($existe) {
+            Db::ejecutar('UPDATE planes SET cuota_mensual = ?, limite_sunat_min = ?, limite_general_min = ?, max_webhooks = ?, activo = 1 WHERE id = ?', array($cuota, $sunat, $gral, $wh, $existe['id']));
+            echo "Plan {$o['nombre']} actualizado (aplica de inmediato a sus empresas)." . PHP_EOL;
+        } else {
+            Db::ejecutar('INSERT INTO planes (nombre, cuota_mensual, limite_sunat_min, limite_general_min, max_webhooks, activo, creado) VALUES (?,?,?,?,?,1,?)', array($o['nombre'], $cuota, $sunat, $gral, $wh, Db::ahora()));
+            echo "Plan {$o['nombre']} creado." . PHP_EOL;
+        }
+        echo '  cuota mensual: ' . ($cuota === null ? 'ilimitada' : $cuota) . ' | emisiones/min: ' . ($sunat === null ? 'sin limite' : $sunat) . ' | peticiones/min: ' . ($gral === null ? 'sin limite' : $gral) . ' | webhooks: ' . $wh . PHP_EOL;
+        break;
+
+    case 'plan:listar':
+        Db::asegurarEsquema();
+        printf("%-14s %-15s %-14s %-16s %-9s %s\n", 'PLAN', 'CUOTA/MES', 'EMISIONES/MIN', 'PETICIONES/MIN', 'WEBHOOKS', 'EMPRESAS');
+        foreach (Db::consultar('SELECT p.*, (SELECT COUNT(*) FROM empresas e WHERE e.plan_id = p.id) AS n FROM planes p ORDER BY p.id') as $p) {
+            printf("%-14s %-15s %-14s %-16s %-9s %d%s\n", $p['nombre'], $p['cuota_mensual'] === null ? 'ilimitada' : $p['cuota_mensual'], $p['limite_sunat_min'] === null ? 'sin limite' : $p['limite_sunat_min'],
+                $p['limite_general_min'] === null ? 'sin limite' : $p['limite_general_min'], $p['max_webhooks'], $p['n'], $p['activo'] ? '' : '  [INACTIVO]');
+        }
+        $sin = Db::uno('SELECT COUNT(*) AS n FROM empresas WHERE plan_id IS NULL');
+        echo "Empresas sin plan (sin ningun limite): {$sin['n']}" . PHP_EOL;
+        break;
+
+    case 'empresa:plan':
+        exigir($o, array('ruc', 'plan'));
+        Db::asegurarEsquema();
+        $e = Db::uno('SELECT * FROM empresas WHERE ruc = ?', array($o['ruc']));
+        if (!$e) {
+            salir('No existe esa empresa.');
+        }
+        if (strtolower($o['plan']) === 'ninguno') {
+            Db::ejecutar('UPDATE empresas SET plan_id = NULL WHERE id = ?', array($e['id']));
+            echo "La empresa {$o['ruc']} quedo SIN plan (sin ningun limite)." . PHP_EOL;
+            break;
+        }
+        $p = Db::uno('SELECT * FROM planes WHERE nombre = ? AND activo = 1', array($o['plan']));
+        if (!$p) {
+            salir("No existe el plan '{$o['plan']}'. Vea los planes con plan:listar (o cree los recomendados con plan:sembrar).");
+        }
+        Db::ejecutar('UPDATE empresas SET plan_id = ? WHERE id = ?', array($p['id'], $e['id']));
+        echo "La empresa {$o['ruc']} ({$e['razon_social']}) ahora tiene el plan {$p['nombre']}." . PHP_EOL;
+        break;
+
+    case 'uso:ver':
+        Db::asegurarEsquema();
+        $sql = 'SELECT * FROM empresas' . (isset($o['ruc']) ? ' WHERE ruc = ?' : '') . ' ORDER BY id';
+        printf("%-12s %-30s %-10s %-10s %-9s %s\n", 'RUC', 'EMPRESA', 'PLAN', 'USADOS', 'CUOTA', 'MES ' . Planes::periodo() . ' (solo llave live)');
+        foreach (Db::consultar($sql, isset($o['ruc']) ? array($o['ruc']) : array()) as $e) {
+            $plan = Planes::de($e);
+            $u = Planes::usado((int) $e['id']);
+            $cuota = $plan['cuota_mensual'];
+            printf("%-12s %-30s %-10s %-10d %-9s %s\n", $e['ruc'], substr($e['razon_social'], 0, 30), $plan['nombre'], $u, $cuota === null ? 'ilimitada' : $cuota, ($cuota !== null && $cuota > 0) ? round(100 * $u / $cuota, 1) . ' %' : '');
+        }
         break;
 
     case 'serie:crear':
@@ -330,6 +425,6 @@ switch ($cmd) {
         break;
 
     default:
-        echo "Comandos: init | empresa:crear | empresa:actualizar | empresa:listar | key:crear | key:listar | key:revocar | cert:subir | cert:ver | serie:crear | serie:listar | db:copiar" . PHP_EOL
+        echo "Comandos: init | empresa:crear | empresa:actualizar | empresa:listar | key:crear | key:listar | key:revocar | cert:subir | cert:ver | serie:crear | serie:listar | db:copiar | plan:sembrar | plan:crear | plan:listar | empresa:plan | uso:ver" . PHP_EOL
             . "Vea el encabezado de bin/admin.php para las opciones." . PHP_EOL;
 }
