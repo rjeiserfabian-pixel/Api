@@ -2,6 +2,8 @@
 /**
  * Emision de documentos: idempotencia, deteccion de duplicados, llamada al motor e historial.
  */
+require_once __DIR__ . '/Certificados.php';
+
 class Documentos
 {
     /** Cuerpo JSON de la peticion (obligatorio, objeto). */
@@ -82,6 +84,7 @@ class Documentos
             }
         }
 
+        Certificados::exigirParaEmitir($empresaId, $entorno); // produccion: certificado propio y vigente
         $cuerpo['empresa'] = Motor::empresa($ctx['empresa'], $entorno); // credenciales siempre desde la base, nunca del cliente
         $res = Motor::llamar($script, $cuerpo);
         $n = Motor::normalizar($script, $res);

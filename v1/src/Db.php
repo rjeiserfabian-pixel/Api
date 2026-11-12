@@ -88,6 +88,21 @@ class Db
             ultimo_uso VARCHAR(19) NULL
         )");
 
+        $pdo->exec("CREATE TABLE IF NOT EXISTS certificados (
+            id $pk,
+            empresa_id INTEGER NOT NULL,
+            entorno VARCHAR(4) NOT NULL,
+            cert_pem $txt NOT NULL,
+            key_cifrada $txt NOT NULL,
+            sujeto VARCHAR(500) NULL,
+            serie_cert VARCHAR(80) NULL,
+            huella VARCHAR(64) NULL,
+            valido_desde VARCHAR(19) NULL,
+            valido_hasta VARCHAR(19) NULL,
+            creado VARCHAR(19) NOT NULL
+        )");
+        $pdo->exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_cert_empresa ON certificados (empresa_id, entorno)');
+
         $pdo->exec("CREATE TABLE IF NOT EXISTS documentos (
             id $pk,
             uid VARCHAR(40) NOT NULL UNIQUE,

@@ -167,7 +167,7 @@ function firmar_xml($carpeta, $name_file, $entorno, $baja = ''){
     $domDocument = new \DOMDocument();
     $domDocument->loadXML($xmlstr);
     $factura  = new Factura();    
-    $xml = $factura->firmar($domDocument, '', $entorno);
+    $xml = $factura->firmar($domDocument, '', $entorno, substr(basename($name_file), 0, 11));
     $content = $xml->saveXML();
     file_put_contents($carpeta."FIRMA/".$name_file, $content);
 }

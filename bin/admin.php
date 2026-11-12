@@ -11,6 +11,8 @@
  *   php bin/admin.php key:crear --ruc=20123456789 --entorno=test|live [--nombre="Mi sistema"]
  *   php bin/admin.php key:listar [--ruc=..]
  *   php bin/admin.php key:revocar --id=3
+ *   php bin/admin.php cert:subir --ruc=20123456789 --entorno=test|live (--pfx=archivo.pfx --pass=clave | --cert=server.pem --key=server_key.pem [--pass=clave_llave])
+ *   php bin/admin.php cert:ver [--ruc=20123456789]
  */
 if (PHP_SAPI !== 'cli') {
     http_response_code(404);
@@ -175,7 +177,53 @@ switch ($cmd) {
         echo "API key {$o['id']} revocada." . PHP_EOL;
         break;
 
+    case 'cert:subir':
+        exigir($o, array('ruc', 'entorno'));
+        if (!in_array($o['entorno'], array('test', 'live'), true)) {
+            salir('--entorno debe ser test o live.');
+        }
+        $e = Db::uno('SELECT * FROM empresas WHERE ruc = ?', array($o['ruc']));
+        if (!$e) {
+            salir('No existe esa empresa.');
+        }
+        require_once $raiz . '/v1/src/Certificados.php';
+        try {
+            if (isset($o['pfx'])) {
+                if (!is_file($o['pfx'])) {
+                    salir('No existe el archivo ' . $o['pfx']);
+                }
+                list($certPem, $keyPem) = Certificados::leerPfx(file_get_contents($o['pfx']), isset($o['pass']) ? $o['pass'] : '');
+                $clave = null;
+            } else {
+                exigir($o, array('cert', 'key'));
+                if (!is_file($o['cert']) || !is_file($o['key'])) {
+                    salir('No existe el archivo de --cert o --key.');
+                }
+                $certPem = file_get_contents($o['cert']);
+                $keyPem = file_get_contents($o['key']);
+                $clave = isset($o['pass']) ? $o['pass'] : null;
+            }
+            list($hoja, $keyLimpia, $info) = Certificados::validar($certPem, $keyPem, $o['ruc'], $o['entorno'], $clave);
+        } catch (ApiError $err) {
+            salir('Certificado rechazado: ' . $err->getMessage());
+        }
+        Certificados::guardar($e['id'], $o['entorno'], $hoja, $keyLimpia, $info);
+        echo 'Certificado guardado (' . $o['entorno'] . '): ' . $info['sujeto'] . PHP_EOL . '  vigente hasta ' . $info['valido_hasta'] . ($info['ruc_coincide'] ? '' : '  [AVISO: no contiene el RUC; solo sirve para pruebas]') . PHP_EOL;
+        break;
+
+    case 'cert:ver':
+        require_once $raiz . '/v1/src/Certificados.php';
+        $sql = 'SELECT e.ruc, e.id FROM empresas e' . (isset($o['ruc']) ? ' WHERE e.ruc = ?' : '') . ' ORDER BY e.id';
+        foreach (Db::consultar($sql, isset($o['ruc']) ? array($o['ruc']) : array()) as $e) {
+            foreach (array('test', 'live') as $ent) {
+                $c = Certificados::estado($e['id'], $ent);
+                printf("%s  %-4s  %s
+", $e['ruc'], $ent, $c ? $c['sujeto'] . '  vence ' . $c['valido_hasta'] . ' (' . $c['dias_restantes'] . ' dias)' . ($c['por_vencer'] ? '  [POR VENCER]' : '') : '(sin certificado propio' . ($ent === 'test' ? ': usa el compartido de pruebas)' : ': NO PUEDE EMITIR EN PRODUCCION)'));
+            }
+        }
+        break;
+
     default:
-        echo "Comandos: init | empresa:crear | empresa:actualizar | empresa:listar | key:crear | key:listar | key:revocar" . PHP_EOL
+        echo "Comandos: init | empresa:crear | empresa:actualizar | empresa:listar | key:crear | key:listar | key:revocar | cert:subir | cert:ver" . PHP_EOL
             . "Vea el encabezado de bin/admin.php para las opciones." . PHP_EOL;
 }

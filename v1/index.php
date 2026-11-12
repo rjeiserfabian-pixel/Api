@@ -47,15 +47,16 @@ if ($ruta === '/health') {
 
 $permitidos = array(
     '/me' => 'GET', '/comprobantes' => 'POST', '/resumenes' => 'POST', '/bajas' => 'POST',
-    '/reversiones' => 'POST', '/retenciones' => 'POST', '/guias' => 'POST', '/tickets' => 'POST', '/documentos' => 'GET',
+    '/reversiones' => 'POST', '/retenciones' => 'POST', '/guias' => 'POST', '/tickets' => 'POST', '/documentos' => 'GET', '/certificado' => 'GET|POST',
 );
 $esDetalle = preg_match('#^/documentos/(doc_[a-f0-9]{20})$#', $ruta, $m);
 if (!$esDetalle && !isset($permitidos[$ruta])) {
     Respuesta::error(404, 'ruta_no_encontrada', "No existe $metodo /v1$ruta");
 }
 $esperado = $esDetalle ? 'GET' : $permitidos[$ruta];
-if ($metodo !== $esperado) {
-    Respuesta::error(405, 'metodo_no_permitido', "Use $esperado en /v1$ruta", null, array('Allow' => $esperado));
+if (!in_array($metodo, explode('|', $esperado), true)) {
+    $lista = str_replace('|', ', ', $esperado);
+    Respuesta::error(405, 'metodo_no_permitido', "Use $lista en /v1$ruta", null, array('Allow' => $lista));
 }
 
 $ctx = Auth::autenticar();
@@ -67,7 +68,15 @@ if ($ruta === '/me') {
         'entorno' => $ctx['key']['entorno'] === 'live' ? 'produccion' : 'prueba',
         'api_key' => $ctx['key']['prefijo'] . '...',
         'credenciales_sol' => !empty($empresa['sol_usuario']), 'credenciales_gre' => !empty($empresa['gre_client_id']),
+        'certificado' => Certificados::estado($empresa['id'], $ctx['key']['entorno']),
     ));
+}
+if ($ruta === '/certificado' && $metodo === 'GET') {
+    $e = Certificados::estado($empresa['id'], $ctx['key']['entorno']);
+    if (!$e) {
+        throw new ApiError(404, 'certificado_no_registrado', 'Esta empresa no tiene certificado registrado para este entorno.' . ($ctx['key']['entorno'] === 'test' ? ' En pruebas se usa un certificado compartido.' : ''));
+    }
+    Respuesta::ok($e);
 }
 if ($esDetalle) {
     Respuesta::ok(Documentos::obtener($ctx, $m[1]));
@@ -81,6 +90,37 @@ $b = Documentos::cuerpo();
 unset($b['empresa']); // las credenciales y datos del emisor salen de la base, no del cliente
 
 switch ($ruta) {
+    case '/certificado':
+        // Opcion A: {"pfx_base64": "...", "password": "..."}   Opcion B: {"cert_pem": "...", "key_pem": "...", "key_password": "..."}
+        $v = new Validador();
+        $esPfx = isset($b['pfx_base64']);
+        if ($esPfx) {
+            $v->requerido($b, 'password');
+        } else {
+            $v->requerido($b, 'cert_pem');
+            $v->requerido($b, 'key_pem');
+        }
+        $v->lanzarSiHayErrores();
+        if ($esPfx) {
+            $bin = base64_decode((string) $b['pfx_base64'], true);
+            if ($bin === false || $bin === '') {
+                throw new ApiError(422, 'certificado_invalido', 'pfx_base64 no es base64 valido.');
+            }
+            list($certPem, $keyPem) = Certificados::leerPfx($bin, $b['password']);
+            $clave = null;
+        } else {
+            $certPem = $b['cert_pem'];
+            $keyPem = $b['key_pem'];
+            $clave = isset($b['key_password']) ? $b['key_password'] : null;
+        }
+        list($hoja, $keyLimpia, $info) = Certificados::validar($certPem, $keyPem, $empresa['ruc'], $ctx['key']['entorno'], $clave);
+        Certificados::guardar($empresa['id'], $ctx['key']['entorno'], $hoja, $keyLimpia, $info);
+        $d = Certificados::estado($empresa['id'], $ctx['key']['entorno']);
+        if (!$info['ruc_coincide']) {
+            $d['aviso'] = 'El certificado no contiene el RUC de la empresa; se acepta solo en pruebas. Para produccion debe estar emitido a nombre de la empresa.';
+        }
+        Respuesta::ok($d); // 200: el certificado se reemplaza por el nuevo
+
     case '/comprobantes':
         Validador::comprobante($b);
         foreach (array('total_exonerada', 'total_inafecta', 'total_gratuita', 'total_gratuita_igv', 'total_bolsa', 'fecha_vencimiento') as $c) {

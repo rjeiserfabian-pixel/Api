@@ -2,14 +2,25 @@
 header ('Content-type: text/html; charset=utf-8'); 
 require 'see/lib/xmlseclibs-master/xmlseclibs.php';
 class Factura{
-	public function firmar(DOMDocument $domDocument, $ruc="", $modo){
+	public function firmar(DOMDocument $domDocument, $ruc="", $modo, $rucEmpresa=""){
                 //echo "modo:".$modo;
 		$ReferenceNodeName = 'ExtensionContent';
 //                $privateKey = file_get_contents('prueba/server_key.pem');
 //		$publicKey = file_get_contents('prueba/server.pem');
-                $modo = ($modo == 1) ? 'produccion' : 'prueba';
-                $privateKey = file_get_contents("libraries/certificado_digital/$modo/server_key.pem");
-                $publicKey = file_get_contents("libraries/certificado_digital/$modo/server.pem");
+                // Certificado propio de la empresa (si esta registrada en la API v1). Ver v1/src/Certificados.php
+                $propio = null;
+                if ($rucEmpresa !== "") {
+                    require_once __DIR__ . "/../v1/src/Certificados.php";
+                    $propio = Certificados::paraFirmar($rucEmpresa, $modo);
+                }
+                if ($propio !== null) {
+                    $privateKey = $propio["key"];
+                    $publicKey = $propio["cert"];
+                } else {
+                    $modo = ($modo == 1) ? 'produccion' : 'prueba';
+                    $privateKey = file_get_contents("libraries/certificado_digital/$modo/server_key.pem");
+                    $publicKey = file_get_contents("libraries/certificado_digital/$modo/server.pem");
+                }
                                                                 
 //              $privateKey = file_get_contents(APPPATH ."libraries/certificado_digital/$modo/server_key.pem");
 //		$publicKey = file_get_contents(APPPATH ."libraries/certificado_digital/$modo/server.pem");
