@@ -6,6 +6,8 @@ require_once __DIR__ . '/Certificados.php';
 require_once __DIR__ . '/Series.php';
 require_once __DIR__ . '/Webhooks.php';
 require_once __DIR__ . '/Planes.php';
+require_once __DIR__ . '/Verificacion.php';
+require_once __DIR__ . '/Comprobante.php';
 
 class Documentos
 {
@@ -38,19 +40,37 @@ class Documentos
         return $a;
     }
 
+    /** RUC del emisor de un documento (con memoria: formatear se usa en listados). */
+    private static function rucDe($empresaId)
+    {
+        static $rucs = array();
+        if (!isset($rucs[$empresaId])) {
+            $e = Db::uno('SELECT ruc FROM empresas WHERE id = ?', array($empresaId));
+            $rucs[$empresaId] = $e ? $e['ruc'] : null;
+        }
+        return $rucs[$empresaId];
+    }
+
     public static function formatear(array $f)
     {
+        $ruc = self::rucDe((int) $f['empresa_id']);
+        $slug = $ruc ? Verificacion::slugDeFila($f, $ruc) : null;
         $arch = array();
         foreach (array('xml' => 'ruta_xml', 'cdr' => 'ruta_cdr', 'pdf' => 'ruta_pdf') as $k => $c) {
-            if (!empty($f[$c])) {
+            if ($k !== 'pdf' && !empty($f[$c])) {
                 $arch[$k] = $f[$c];
             }
+        }
+        // El PDF no es un archivo guardado: la API lo genera a pedido desde el XML firmado (GET /documentos/{id}/pdf)
+        if ($f['estado'] === 'aceptado' && Comprobante::imprimible($f['tipo'])) {
+            $arch['pdf'] = Verificacion::urlApi() . '/documentos/' . $f['uid'] . '/pdf';
         }
         return array(
             'id' => $f['uid'], 'tipo' => $f['tipo'], 'serie' => $f['serie'], 'numero' => $f['numero'],
             'entorno' => $f['entorno'] === 'live' ? 'produccion' : 'prueba', 'estado' => $f['estado'],
             'sunat' => array('codigo' => $f['codigo_sunat'], 'descripcion' => $f['mensaje_sunat']),
             'ticket' => $f['ticket'], 'hash' => $f['hash_firma'], 'archivos' => (object) $arch, 'creado' => $f['creado'],
+            'verificacion' => $slug ? Verificacion::enlaces($slug) : null,
         );
     }
 
@@ -160,11 +180,22 @@ class Documentos
         list($n, $uid) = self::enviar($ctx, $fila, $script, $cuerpo, $tipo, $serie, $numero, $auto);
 
         $data = self::formatear(Db::uno('SELECT * FROM documentos WHERE uid = ?', array($uid)));
-        if (isset($_GET['incluir']) && $_GET['incluir'] === 'archivos') {
+        $incluir = isset($_GET['incluir']) && is_string($_GET['incluir']) ? array_map('trim', explode(',', $_GET['incluir'])) : array();
+        if (in_array('archivos', $incluir, true) || in_array('pdf', $incluir, true)) {
             $arch = (array) $data['archivos'];
-            foreach (array('xml_base_64', 'cdr_base_64') as $k) {
-                if (isset($n['archivos'][$k])) {
-                    $arch[$k] = $n['archivos'][$k];
+            if (in_array('archivos', $incluir, true)) {
+                foreach (array('xml_base_64', 'cdr_base_64') as $k) {
+                    if (isset($n['archivos'][$k])) {
+                        $arch[$k] = $n['archivos'][$k];
+                    }
+                }
+            }
+            if (in_array('pdf', $incluir, true) && isset($arch['pdf']) && !empty(Planes::de($ctx['empresa'])['incluye_pdf'])) {
+                try { // pedirlo es opcional: si falla, el documento YA emitido no se ve afectado
+                    require_once __DIR__ . '/Pdf.php';
+                    $arch['pdf_base_64'] = base64_encode(Pdf::generar(Db::uno('SELECT * FROM documentos WHERE uid = ?', array($uid))));
+                } catch (Exception $x) {
+                    error_log('[v1] no se pudo incluir el PDF de ' . $uid . ': ' . $x->getMessage());
                 }
             }
             $data['archivos'] = (object) $arch;
@@ -197,6 +228,7 @@ class Documentos
                 $n['archivos'][$k] = Motor::urlPublica($n['archivos'][$k]);
             }
         }
+        unset($n['archivos']['pdf']); // el motor antiguo no genera PDF: el de la API se genera a pedido
 
         $a = $n['archivos'];
         $final = in_array($n['estado'], array('aceptado', 'rechazado'), true);
@@ -227,6 +259,10 @@ class Documentos
         }
 
         self::contabilizar($empresaId, $entorno, $uid, $n['estado']);
+        if (Comprobante::imprimible($tipo)) {
+            Comprobante::guardarExtras($uid, $cuerpo); // direccion del cliente y observaciones (no viajan en el XML) para el PDF
+        }
+        Verificacion::capturar($uid); // fecha y total (del XML firmado) para la consulta publica; un fallo aqui no afecta al documento
 
         // Aviso por webhook (un problema aqui NUNCA debe afectar al documento ya registrado)
         if ($final) {
@@ -407,6 +443,36 @@ class Documentos
             throw new ApiError(404, 'no_encontrado', 'Documento no encontrado.');
         }
         return self::formatear($f);
+    }
+
+    /** Fila de un documento de la empresa (sin formatear). Lanza 404 si no existe o es de otra empresa. */
+    public static function fila(array $ctx, $uid)
+    {
+        $f = Db::uno('SELECT * FROM documentos WHERE uid = ? AND empresa_id = ?', array($uid, $ctx['empresa']['id']));
+        if (!$f) {
+            throw new ApiError(404, 'no_encontrado', 'Documento no encontrado.');
+        }
+        return $f;
+    }
+
+    /** PDF de un documento propio: valida el plan, el estado y el formato. Devuelve array('pdf' => contenido, 'nombre' => archivo). */
+    public static function pdf(array $ctx, $uid, $formato)
+    {
+        if (empty(Planes::de($ctx['empresa'])['incluye_pdf'])) {
+            throw new ApiError(403, 'pdf_no_incluido', 'Su plan no incluye la generación de PDF. Pida el cambio de plan al administrador del servicio.');
+        }
+        if ($formato !== null && !in_array($formato, array('a4', 'ticket'), true)) {
+            throw new ApiError(422, 'validacion', 'El formato debe ser a4 o ticket.', array(array('campo' => 'formato', 'mensaje' => 'use a4 o ticket')));
+        }
+        $f = self::fila($ctx, $uid);
+        if (!Comprobante::imprimible($f['tipo'])) {
+            throw new ApiError(422, 'pdf_no_disponible', 'Solo hay PDF de facturas, boletas y notas de crédito/débito.');
+        }
+        if ($f['estado'] !== 'aceptado') {
+            throw new ApiError(409, 'documento_no_aceptado', 'El PDF solo se genera para documentos aceptados por SUNAT (estado actual: ' . $f['estado'] . ').');
+        }
+        require_once __DIR__ . '/Pdf.php';
+        return array('pdf' => Pdf::generar($f, $formato), 'nombre' => $f['serie'] . '-' . str_pad($f['numero'], 8, '0', STR_PAD_LEFT) . '.pdf');
     }
 
     public static function listar(array $ctx)

@@ -376,7 +376,7 @@ chk('no se puede DESACTIVAR un plan con empresas (quedarian sin ningun limite)',
 
 echo "\n== 7) El cliente pide un plan (portal): automatico vs con aprobacion\n";
 $pagPlan = $cA->get('/plan');
-chk('el portal lista los planes activos y marca "inmediata" / "con aprobacion"', $pagPlan['http'] === 200 && strpos($pagPlan['cuerpo'], 'LabPago') !== false && strpos($pagPlan['cuerpo'], 'inmediata') !== false && strpos($pagPlan['cuerpo'], 'con aprobación') !== false);
+chk('el portal lista los planes activos: "Cambiar" (autoservicio) o "Solicitar" (con aprobacion)', $pagPlan['http'] === 200 && strpos($pagPlan['cuerpo'], 'LabPago') !== false && strpos($pagPlan['cuerpo'], '>Cambiar<') !== false && strpos($pagPlan['cuerpo'], '>Solicitar<') !== false);
 $cA->post('/plan/solicitar', array('plan_id' => planId('LabIlim'), 'clave_actual' => 'contrasena-equivocada-1'), '/plan');
 chk('pedir un plan con la contrasena equivocada -> no se registra nada', (int) Db::uno('SELECT COUNT(*) AS n FROM solicitudes_plan WHERE empresa_id = ?', array($eA))['n'] === 0);
 Db::ejecutar('UPDATE usuarios_portal SET intentos_fallidos = 0, bloqueado_hasta = NULL');
@@ -572,7 +572,8 @@ $flood = new Cli($OP);
 for ($i = 0; $i < 21; $i++) {
     $flood->login('inexistente' . $i . '@lab-op.test', 'Alguna-Clave-123');
 }
-chk('tras 20 fallos desde una IP, ni el operador legitimo entra desde ella', (new Cli($OP))->login('opa@lab-op.test', $CLAVE)['http'] === 401);
+Planes::limpiar(); // lo que hace el worker cada ciclo: NO debe borrar los contadores vigentes
+chk('tras 20 fallos desde una IP, ni el operador legitimo entra desde ella (tambien tras la limpieza del worker)', (new Cli($OP))->login('opa@lab-op.test', $CLAVE)['http'] === 401);
 Db::ejecutar("DELETE FROM limites WHERE clave LIKE 'oplogin:%'");
 Db::ejecutar('UPDATE operadores SET intentos_fallidos = 0, bloqueado_hasta = NULL');
 chk('(al vencer la ventana vuelve a funcionar)', (new Cli($OP))->login('opa@lab-op.test', $CLAVE)['http'] === 302);

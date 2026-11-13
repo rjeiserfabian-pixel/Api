@@ -3,7 +3,7 @@
     "info": {
         "title": "API SUNAT - Facturación electrónica",
         "version": "1.0.0",
-        "description": "API REST para emitir **comprobantes electrónicos a SUNAT** (facturas, boletas, notas, retenciones, guías, resúmenes y bajas) sin manejar XML, firmas ni servicios web de SUNAT: usted envía un JSON y recibe el resultado.\n\n## Primeros pasos\n1. Obtenga su **API key** (se la entrega el administrador). Hay dos tipos:\n   - `sk_test_…` → **pruebas**: envía al **beta** de SUNAT. No tiene efectos tributarios.\n   - `sk_live_…` → **producción**: documentos reales ante SUNAT.\n2. Envíela en cada petición: `Authorization: Bearer sk_test_…`\n3. Compruebe con `GET /me`.\n4. Emita su primera factura con `POST /comprobantes`.\n\n## Autenticación y entornos\nEl **entorno lo decide la llave**, no el JSON. Las credenciales SOL y el certificado digital de su empresa están registrados en la API: **no se envían en las peticiones**. Para producción la empresa debe registrar su certificado (`POST /certificado` con llave `live`).\n\n## Cómo leer las respuestas\nToda respuesta es `{ \"ok\": true, \"data\": … }` o `{ \"ok\": false, \"error\": { \"code\", \"message\", \"details\" } }`, y siempre incluye `request_id` (también en la cabecera `X-Request-Id`).\n\n- **HTTP 201**: la API procesó el documento. Mire `data.estado`: `aceptado`, `rechazado`, `pendiente` o `simulado`. **Que SUNAT rechace un documento no es un error HTTP**: `data.sunat.descripcion` explica el motivo.\n- **HTTP 4xx**: la petición no se procesó (datos inválidos, sin autenticar, duplicado…). No se envió nada a SUNAT.\n- **HTTP 5xx (500, 502, 504)**: fallo temporal del servicio o de SUNAT. Reintente con la misma `Idempotency-Key`.\n\n## Reintentos seguros: `Idempotency-Key`\nEnvíe en cada emisión una cabecera `Idempotency-Key` única por operación (por ejemplo, el id de su venta). Si no recibe respuesta (corte de red), repita **la misma petición con la misma clave**: recibirá el resultado guardado (`200` + `Idempotent-Replay: true`) sin riesgo de duplicar el documento ante SUNAT. Además, un tipo-serie-número ya aceptado o pendiente responde `409 documento_duplicado`.\n\n## Numeración y sincronización con su sistema comercial\nCada serie (por empresa y por entorno) tiene un **dueño**:\n\n- **`cliente`** (por defecto): su sistema comercial numera y envía `venta.numero` como siempre. La API **aprende** el último número usado (`GET /series`): no importa si salta o llega desordenado.\n- **`api`**: la API numera. Puede **omitir `numero`** (se asigna solo, de forma atómica, sin repetir) o **reservar números** con `POST /series/reservar`, imprimirlos en el comprobante y **enviarlos a SUNAT después** con ese mismo número.\n\nGarantías:\n- **Sin duplicados ni saltos por reintento:** la numeración automática exige `Idempotency-Key`; si el envío falla (SUNAT caído, corte de red) y usted reintenta con la misma clave, se **reutiliza el mismo número**.\n- Si SUNAT **rechaza** un documento numerado automáticamente, su número se libera y el documento corregido lo reutiliza.\n- Los números se comparan como enteros: `150` y `00000150` son el mismo documento.\n- Resúmenes, bajas y reversiones usan un **correlativo por día** que se asigna solo si lo omite.\n- Cada entorno tiene sus propias series: **registre también las de producción** (con `ultimo_numero` = el último que ya usó) antes de emitir con una llave `live`.\n\n**Consultar por serie y número** (por ejemplo, un cliente que recibió la boleta antes de que se enviara a SUNAT): `GET /comprobantes/{tipo}/{serie}/{numero}` responde `reservado`, `aceptado`, etc., o `404` si aún no existe.\n\n## Reintentos automáticos y webhooks\n**Reintentos.** Si envía un documento con `Idempotency-Key` y SUNAT (o el motor) falla por un problema **transitorio**, el documento queda en estado `error` conservando su número y la API **lo reenvía sola** con espera creciente: 1 min, 5 min, 15 min, 1 h, 3 h, 6 h y 12 h (8 intentos en total). Nunca se duplica: cada intento usa el mismo número, y si usted reintenta a la vez, solo uno de los dos envía. Un rechazo de SUNAT **no** se reintenta (hay que corregir los datos). Sin `Idempotency-Key` no hay reintentos automáticos: un reintento ajeno podría duplicar una venta que usted ya repitió con otro número.\n\n**Webhooks.** Registre una URL (`POST /webhooks`) y la API le avisa cuando un documento llega a un estado final, sin que usted tenga que consultar:\n\n| Evento | Cuándo |\n|---|---|\n| `documento.aceptado` | SUNAT aceptó el documento (también al resolverse un reintento o el ticket de una guía) |\n| `documento.rechazado` | SUNAT lo rechazó (`data.sunat` explica el motivo) |\n| `documento.error` | Se agotaron los reintentos (o el fallo no es reintentable): necesita atención |\n| `cuota.advertencia` | Su cuota mensual llegó al 80 % (`data`: plan, usados, restantes, porcentaje y fecha de reinicio; no es un documento) |\n| `cuota.agotada` | Su cuota mensual llegó al 100 % |\n\nCada aviso es un `POST` JSON `{ id, tipo, entorno, creado, data: <Documento> }`. **No incluye datos del cliente final**, solo el estado y los enlaces. Su servidor debe responder **2xx** en menos de 10 segundos; si no, la API reintenta (1 min, 5 min, 15 min, 1 h, 3 h, 6 h, 12 h, 24 h) y después marca la entrega como `fallido` (puede reenviarla con `POST /webhooks/{id}/entregas/{id}/reenviar`). Como puede haber reintentos, **el mismo evento puede llegar más de una vez: use `id` del evento para ignorar repetidos**.\n\n**Verifique la firma** de cada aviso (cabecera `X-Webhook-Signature: t=<unix>,v1=<hex>`): `hex = HMAC_SHA256(secreto, \"<unix>.<cuerpo exacto>\")`. Rechace avisos con firma inválida o con `t` de hace más de 5 minutos.\n\n```php\n$cuerpo = file_get_contents('php://input');\n[$t, $v1] = [substr(explode(',', $_SERVER['HTTP_X_WEBHOOK_SIGNATURE'])[0], 2), substr(explode(',', $_SERVER['HTTP_X_WEBHOOK_SIGNATURE'])[1], 3)];\n$ok = abs(time() - $t) < 300 && hash_equals(hash_hmac('sha256', $t . '.' . $cuerpo, $SECRETO_WHSEC), $v1);\n```\n\nPor seguridad, la URL debe ser **pública** (no se aceptan direcciones privadas, locales ni de metadatos de nube), con **HTTPS en producción**, sin usuario/clave y sin redirecciones. El **secreto** (`whsec_…`) se muestra una sola vez al crear el webhook. Todo esto lo ejecuta un proceso aparte (`php bin/worker.php`); `GET /health` indica si está `activo`.\n\n## Planes, límites y cuota\nSu plan define dos cosas distintas:\n\n**1. Límite de velocidad (peticiones por minuto).** Protege el servicio y a SUNAT; no se factura. Se mide **por API key** y por minuto, en dos clases:\n- **Emisiones** (`POST /comprobantes`, `/resumenes`, `/bajas`, `/reversiones`, `/retenciones`, `/guias`, `/tickets`): son las caras, porque dependen de SUNAT.\n- **Demás peticiones** (consultas, series, webhooks…): baratas, con un límite mayor.\n\nCada respuesta trae `X-RateLimit-Limit`, `X-RateLimit-Remaining` y `X-RateLimit-Reset` (segundos hasta el siguiente minuto). Si se excede: **`429`** con la cabecera **`Retry-After`** (segundos). Además existe un **tope global de emisiones** (para que ningún cliente degrade a los demás): si el servicio está saturado recibirá `429 servicio_saturado`; espere y reintente. **Un 429 no pierde nada**: reintente con la misma `Idempotency-Key`.\n\n**2. Cuota mensual de documentos (lo que contrata).** Consumen cuota solo los documentos **emitidos y aceptados por SUNAT** (o recibidos y en espera de su ticket, como una guía) **con llave `live`**: factura, boleta, notas, retención y guía. **No consumen:** las pruebas (llave `test`), las consultas, las reservas de números, los **rechazos** de SUNAT, los resúmenes/bajas/reversiones, ni repetir un documento con la misma `Idempotency-Key`. Si SUNAT rechaza una guía al resolver su ticket, la unidad se devuelve. La cuota es **mensual** (mes calendario, hora de Lima).\n\nConsulte su consumo con `GET /uso`; las respuestas de emisión (`live`) traen `X-Quota-Limit` y `X-Quota-Remaining`. Al **80 %** y al **100 %** recibe un aviso por webhook (`cuota.advertencia`, `cuota.agotada`). Al agotarse la cuota, emitir en producción responde **`402 cuota_agotada`** (con la fecha de reinicio; no se envía nada a SUNAT); las pruebas, las consultas y repetir documentos ya emitidos siguen funcionando.\n\n## Flujos frecuentes\n- **Anular una factura** (menos de 7 días): `POST /bajas` → ticket → `POST /tickets`. O emita una **nota de crédito** (motivo `01`).\n- **Anular una boleta**: no existe baja para boletas; envíela en un **resumen diario** con `status` = 3 (`POST /resumenes`).\n- **Boletas del día**: `POST /resumenes` (SUNAT lo exige para boletas).\n\n## Códigos de error\n| `code` | HTTP | Significado |\n|---|---|---|\n| `no_autenticado` | 401 | Falta la API key o es inválida/revocada |\n| `empresa_inactiva` | 403 | Empresa desactivada |\n| `ruta_no_encontrada`, `no_encontrado`, `certificado_no_registrado` | 404 | No existe |\n| `metodo_no_permitido` | 405 | Método HTTP incorrecto (cabecera `Allow`) |\n| `cuerpo_vacio`, `json_invalido`, `idempotency_key_invalida` | 400 | Petición mal formada |\n| `documento_duplicado`, `idempotencia_conflicto` | 409 | Ya existe / clave ya usada con otro cuerpo |\n| `cuerpo_muy_grande` | 413 | Más de 3 MB |\n| `validacion` | 422 | Datos inválidos: `details` lista cada campo y cómo corregirlo |\n| `certificado_requerido`, `certificado_vencido`, `certificado_invalido`, `llave_invalida`, `llave_no_corresponde`, `certificado_ruc_no_coincide`, `certificado_no_vigente` | 422 | Problema con el certificado digital |\n| `motor_no_disponible`, `motor_error` | 502 | El motor o SUNAT no respondieron: reintente |\n| `tiempo_agotado` | 504 | SUNAT no respondió a tiempo: reintente en unos minutos |\n| `limite_de_peticiones`, `servicio_saturado` | 429 | Demasiadas peticiones por minuto, o servicio saturado de emisiones: espere `Retry-After` segundos |\n| `cuota_agotada` | 402 | Cuota mensual de documentos agotada (o plan sin producción) |\n| `error_interno` | 500 | Error inesperado: cite el `request_id` |\n\n## Limitaciones conocidas\n- Un número **reservado** que nunca se envía queda como hueco en la serie (todavía no hay una operación para liberarlo).\n- El límite de velocidad usa ventanas de un minuto: una ráfaga justo en el cambio de minuto puede acercarse al doble del límite durante unos segundos.\n- La cuota se comprueba antes de emitir: con muchas emisiones simultáneas justo al final de la cuota puede excederse por unos pocos documentos.\n- La consulta de tickets depende del servicio de SUNAT, que puede demorar o no responder (`504 tiempo_agotado`).\n- Los tickets de **guías** se consultan solos hasta resolverse; los de **resumen, baja y reversión** se siguen consultando con `POST /tickets` (todavía no se resuelven solos).\n- Los avisos se entregan **al menos una vez** (pueden repetirse) y sin garantía de orden entre documentos distintos."
+        "description": "API REST para emitir **comprobantes electrónicos a SUNAT** (facturas, boletas, notas, retenciones, guías, resúmenes y bajas) sin manejar XML, firmas ni servicios web de SUNAT: usted envía un JSON y recibe el resultado.\n\n## Primeros pasos\n1. Obtenga su **API key** (se la entrega el administrador). Hay dos tipos:\n   - `sk_test_…` → **pruebas**: envía al **beta** de SUNAT. No tiene efectos tributarios.\n   - `sk_live_…` → **producción**: documentos reales ante SUNAT.\n2. Envíela en cada petición: `Authorization: Bearer sk_test_…`\n3. Compruebe con `GET /me`.\n4. Emita su primera factura con `POST /comprobantes`.\n\n## Autenticación y entornos\nEl **entorno lo decide la llave**, no el JSON. Las credenciales SOL y el certificado digital de su empresa están registrados en la API: **no se envían en las peticiones**. Para producción la empresa debe registrar su certificado (`POST /certificado` con llave `live`).\n\n## Cómo leer las respuestas\nToda respuesta es `{ \"ok\": true, \"data\": … }` o `{ \"ok\": false, \"error\": { \"code\", \"message\", \"details\" } }`, y siempre incluye `request_id` (también en la cabecera `X-Request-Id`).\n\n- **HTTP 201**: la API procesó el documento. Mire `data.estado`: `aceptado`, `rechazado`, `pendiente` o `simulado`. **Que SUNAT rechace un documento no es un error HTTP**: `data.sunat.descripcion` explica el motivo.\n- **HTTP 4xx**: la petición no se procesó (datos inválidos, sin autenticar, duplicado…). No se envió nada a SUNAT.\n- **HTTP 5xx (500, 502, 504)**: fallo temporal del servicio o de SUNAT. Reintente con la misma `Idempotency-Key`.\n\n## Reintentos seguros: `Idempotency-Key`\nEnvíe en cada emisión una cabecera `Idempotency-Key` única por operación (por ejemplo, el id de su venta). Si no recibe respuesta (corte de red), repita **la misma petición con la misma clave**: recibirá el resultado guardado (`200` + `Idempotent-Replay: true`) sin riesgo de duplicar el documento ante SUNAT. Además, un tipo-serie-número ya aceptado o pendiente responde `409 documento_duplicado`.\n\n## Numeración y sincronización con su sistema comercial\nCada serie (por empresa y por entorno) tiene un **dueño**:\n\n- **`cliente`** (por defecto): su sistema comercial numera y envía `venta.numero` como siempre. La API **aprende** el último número usado (`GET /series`): no importa si salta o llega desordenado.\n- **`api`**: la API numera. Puede **omitir `numero`** (se asigna solo, de forma atómica, sin repetir) o **reservar números** con `POST /series/reservar`, imprimirlos en el comprobante y **enviarlos a SUNAT después** con ese mismo número.\n\nGarantías:\n- **Sin duplicados ni saltos por reintento:** la numeración automática exige `Idempotency-Key`; si el envío falla (SUNAT caído, corte de red) y usted reintenta con la misma clave, se **reutiliza el mismo número**.\n- Si SUNAT **rechaza** un documento numerado automáticamente, su número se libera y el documento corregido lo reutiliza.\n- Los números se comparan como enteros: `150` y `00000150` son el mismo documento.\n- Resúmenes, bajas y reversiones usan un **correlativo por día** que se asigna solo si lo omite.\n- Cada entorno tiene sus propias series: **registre también las de producción** (con `ultimo_numero` = el último que ya usó) antes de emitir con una llave `live`.\n\n**Consultar por serie y número** (por ejemplo, un cliente que recibió la boleta antes de que se enviara a SUNAT): `GET /comprobantes/{tipo}/{serie}/{numero}` responde `reservado`, `aceptado`, etc., o `404` si aún no existe.\n\n## Reintentos automáticos y webhooks\n**Reintentos.** Si envía un documento con `Idempotency-Key` y SUNAT (o el motor) falla por un problema **transitorio**, el documento queda en estado `error` conservando su número y la API **lo reenvía sola** con espera creciente: 1 min, 5 min, 15 min, 1 h, 3 h, 6 h y 12 h (8 intentos en total). Nunca se duplica: cada intento usa el mismo número, y si usted reintenta a la vez, solo uno de los dos envía. Un rechazo de SUNAT **no** se reintenta (hay que corregir los datos). Sin `Idempotency-Key` no hay reintentos automáticos: un reintento ajeno podría duplicar una venta que usted ya repitió con otro número.\n\n**Webhooks.** Registre una URL (`POST /webhooks`) y la API le avisa cuando un documento llega a un estado final, sin que usted tenga que consultar:\n\n| Evento | Cuándo |\n|---|---|\n| `documento.aceptado` | SUNAT aceptó el documento (también al resolverse un reintento o el ticket de una guía) |\n| `documento.rechazado` | SUNAT lo rechazó (`data.sunat` explica el motivo) |\n| `documento.error` | Se agotaron los reintentos (o el fallo no es reintentable): necesita atención |\n| `cuota.advertencia` | Su cuota mensual llegó al 80 % (`data`: plan, usados, restantes, porcentaje y fecha de reinicio; no es un documento) |\n| `cuota.agotada` | Su cuota mensual llegó al 100 % |\n\nCada aviso es un `POST` JSON `{ id, tipo, entorno, creado, data: <Documento> }`. **No incluye datos del cliente final**, solo el estado y los enlaces. Su servidor debe responder **2xx** en menos de 10 segundos; si no, la API reintenta (1 min, 5 min, 15 min, 1 h, 3 h, 6 h, 12 h, 24 h) y después marca la entrega como `fallido` (puede reenviarla con `POST /webhooks/{id}/entregas/{id}/reenviar`). Como puede haber reintentos, **el mismo evento puede llegar más de una vez: use `id` del evento para ignorar repetidos**.\n\n**Verifique la firma** de cada aviso (cabecera `X-Webhook-Signature: t=<unix>,v1=<hex>`): `hex = HMAC_SHA256(secreto, \"<unix>.<cuerpo exacto>\")`. Rechace avisos con firma inválida o con `t` de hace más de 5 minutos.\n\n```php\n$cuerpo = file_get_contents('php://input');\n[$t, $v1] = [substr(explode(',', $_SERVER['HTTP_X_WEBHOOK_SIGNATURE'])[0], 2), substr(explode(',', $_SERVER['HTTP_X_WEBHOOK_SIGNATURE'])[1], 3)];\n$ok = abs(time() - $t) < 300 && hash_equals(hash_hmac('sha256', $t . '.' . $cuerpo, $SECRETO_WHSEC), $v1);\n```\n\nPor seguridad, la URL debe ser **pública** (no se aceptan direcciones privadas, locales ni de metadatos de nube), con **HTTPS en producción**, sin usuario/clave y sin redirecciones. El **secreto** (`whsec_…`) se muestra una sola vez al crear el webhook. Todo esto lo ejecuta un proceso aparte (`php bin/worker.php`); `GET /health` indica si está `activo`.\n\n## Planes, límites y cuota\nSu plan define dos cosas distintas:\n\n**1. Límite de velocidad (peticiones por minuto).** Protege el servicio y a SUNAT; no se factura. Se mide **por API key** y por minuto, en dos clases:\n- **Emisiones** (`POST /comprobantes`, `/resumenes`, `/bajas`, `/reversiones`, `/retenciones`, `/guias`, `/tickets`): son las caras, porque dependen de SUNAT.\n- **Demás peticiones** (consultas, series, webhooks…): baratas, con un límite mayor.\n\nCada respuesta trae `X-RateLimit-Limit`, `X-RateLimit-Remaining` y `X-RateLimit-Reset` (segundos hasta el siguiente minuto). Si se excede: **`429`** con la cabecera **`Retry-After`** (segundos). Además existe un **tope global de emisiones** (para que ningún cliente degrade a los demás): si el servicio está saturado recibirá `429 servicio_saturado`; espere y reintente. **Un 429 no pierde nada**: reintente con la misma `Idempotency-Key`.\n\n**2. Cuota mensual de documentos (lo que contrata).** Consumen cuota solo los documentos **emitidos y aceptados por SUNAT** (o recibidos y en espera de su ticket, como una guía) **con llave `live`**: factura, boleta, notas, retención y guía. **No consumen:** las pruebas (llave `test`), las consultas, las reservas de números, los **rechazos** de SUNAT, los resúmenes/bajas/reversiones, ni repetir un documento con la misma `Idempotency-Key`. Si SUNAT rechaza una guía al resolver su ticket, la unidad se devuelve. La cuota es **mensual** (mes calendario, hora de Lima).\n\nConsulte su consumo con `GET /uso`; las respuestas de emisión (`live`) traen `X-Quota-Limit` y `X-Quota-Remaining`. Al **80 %** y al **100 %** recibe un aviso por webhook (`cuota.advertencia`, `cuota.agotada`). Al agotarse la cuota, emitir en producción responde **`402 cuota_agotada`** (con la fecha de reinicio; no se envía nada a SUNAT); las pruebas, las consultas y repetir documentos ya emitidos siguen funcionando.\n\n## Flujos frecuentes\n- **Anular una factura** (menos de 7 días): `POST /bajas` → ticket → `POST /tickets`. O emita una **nota de crédito** (motivo `01`).\n- **Anular una boleta**: no existe baja para boletas; envíela en un **resumen diario** con `status` = 3 (`POST /resumenes`).\n- **Boletas del día**: `POST /resumenes` (SUNAT lo exige para boletas).\n\n## Códigos de error\n| `code` | HTTP | Significado |\n|---|---|---|\n| `no_autenticado` | 401 | Falta la API key o es inválida/revocada |\n| `empresa_inactiva` | 403 | Empresa desactivada |\n| `ruta_no_encontrada`, `no_encontrado`, `certificado_no_registrado` | 404 | No existe |\n| `metodo_no_permitido` | 405 | Método HTTP incorrecto (cabecera `Allow`) |\n| `cuerpo_vacio`, `json_invalido`, `idempotency_key_invalida` | 400 | Petición mal formada |\n| `documento_duplicado`, `idempotencia_conflicto` | 409 | Ya existe / clave ya usada con otro cuerpo |\n| `cuerpo_muy_grande` | 413 | Más de 3 MB |\n| `validacion` | 422 | Datos inválidos: `details` lista cada campo y cómo corregirlo |\n| `certificado_requerido`, `certificado_vencido`, `certificado_invalido`, `llave_invalida`, `llave_no_corresponde`, `certificado_ruc_no_coincide`, `certificado_no_vigente` | 422 | Problema con el certificado digital |\n| `motor_no_disponible`, `motor_error` | 502 | El motor o SUNAT no respondieron: reintente |\n| `tiempo_agotado` | 504 | SUNAT no respondió a tiempo: reintente en unos minutos |\n| `limite_de_peticiones`, `servicio_saturado` | 429 | Demasiadas peticiones por minuto, o servicio saturado de emisiones: espere `Retry-After` segundos |\n| `cuota_agotada` | 402 | Cuota mensual de documentos agotada (o plan sin producción) |\n| `error_interno` | 500 | Error inesperado: cite el `request_id` |\n\n## Limitaciones conocidas\n- Un número **reservado** que nunca se envía queda como hueco en la serie (todavía no hay una operación para liberarlo).\n- El límite de velocidad usa ventanas de un minuto: una ráfaga justo en el cambio de minuto puede acercarse al doble del límite durante unos segundos.\n- La cuota se comprueba antes de emitir: con muchas emisiones simultáneas justo al final de la cuota puede excederse por unos pocos documentos.\n- La consulta de tickets depende del servicio de SUNAT, que puede demorar o no responder (`504 tiempo_agotado`).\n- Los tickets de **guías** se consultan solos hasta resolverse; los de **resumen, baja y reversión** se siguen consultando con `POST /tickets` (todavía no se resuelven solos).\n- Los avisos se entregan **al menos una vez** (pueden repetirse) y sin garantía de orden entre documentos distintos.\n- **PDF (opcional):** la API entrega el XML firmado y el CDR. Si lo necesita, también genera la **representación impresa en PDF** (A4 o ticket de 80 mm) con el logo y los colores de cada empresa: `GET /documentos/{id}/pdf`, o `?incluir=pdf` al emitir (llega como `pdf_base_64`). Si su sistema ya imprime sus propios PDF, ignórelo.\n\n## Verificación pública de documentos\nCada documento (factura, boleta, notas, retención y guía) trae en `data.verificacion` un **enlace público** y un **código QR** para que cualquiera pueda comprobar que fue emitido por el servicio y ver el estado que informó SUNAT, **sin necesidad de API key**:\n\n- `verificacion.url`: la página pública de verificación de ese documento.\n- `verificacion.qr`: imagen PNG del QR de esa página, para **imprimirla en sus propios comprobantes** (PDF o tickets) junto al QR estándar de SUNAT. (El PDF que genera la API ya lo incluye.)\n- `GET /verificar/{codigo}` y `POST /verificar`: la misma consulta por API (sin llave), por si su sistema quiere validar documentos recibidos.\n\nEl código incluye una firma de 60 bits: **sin el código correcto no se obtiene ningún dato**. Solo se muestran datos públicos mínimos (emisor, tipo, número, fecha, total y estado según SUNAT), nunca datos del comprador. Los documentos de **prueba** se marcan como tales y nunca figuran como válidos. Cada empresa puede **desactivar** la verificación pública desde su portal. La validez tributaria la confirma SUNAT: esta consulta informa lo que SUNAT respondió al emitir."
     },
     "servers": [
         {
@@ -45,6 +45,9 @@
         },
         {
             "name": "Certificado"
+        },
+        {
+            "name": "Verificación"
         }
     ],
     "paths": {
@@ -600,9 +603,14 @@
                                                 "archivos": {
                                                     "xml": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/FIRMA/20000000001-01-F001-94455099.xml",
                                                     "cdr": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/CDR/R-20000000001-01-F001-94455099.xml",
-                                                    "pdf": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/PDF/20000000001-01-F001-94455099.pdf"
+                                                    "pdf": "https://api.tu-dominio.com/v1/documentos/doc_0e7ded8531fd33aede36/pdf"
                                                 },
-                                                "creado": "2026-11-11 22:45:01"
+                                                "creado": "2026-11-11 22:45:01",
+                                                "verificacion": {
+                                                    "codigo": "20000000001-01-F001-94455099-K7M2Q9XA4BHD",
+                                                    "url": "https://www.tu-dominio.com/verificar/20000000001-01-F001-94455099-K7M2Q9XA4BHD",
+                                                    "qr": "https://api.tu-dominio.com/v1/verificar/20000000001-01-F001-94455099-K7M2Q9XA4BHD/qr"
+                                                }
                                             },
                                             "request_id": "req_5c9fdc752c96fc22"
                                         }
@@ -625,7 +633,12 @@
                                                 "ticket": null,
                                                 "hash": null,
                                                 "archivos": {},
-                                                "creado": "2026-11-11 22:45:01"
+                                                "creado": "2026-11-11 22:45:01",
+                                                "verificacion": {
+                                                    "codigo": "20000000001-01-F001-94455099-K7M2Q9XA4BHD",
+                                                    "url": "https://www.tu-dominio.com/verificar/20000000001-01-F001-94455099-K7M2Q9XA4BHD",
+                                                    "qr": "https://api.tu-dominio.com/v1/verificar/20000000001-01-F001-94455099-K7M2Q9XA4BHD/qr"
+                                                }
                                             },
                                             "request_id": "req_92993a546c654698"
                                         }
@@ -678,9 +691,14 @@
                                         "archivos": {
                                             "xml": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/FIRMA/20000000001-01-F001-94455099.xml",
                                             "cdr": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/CDR/R-20000000001-01-F001-94455099.xml",
-                                            "pdf": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/PDF/20000000001-01-F001-94455099.pdf"
+                                            "pdf": "https://api.tu-dominio.com/v1/documentos/doc_0e7ded8531fd33aede36/pdf"
                                         },
-                                        "creado": "2026-11-11 22:45:01"
+                                        "creado": "2026-11-11 22:45:01",
+                                        "verificacion": {
+                                            "codigo": "20000000001-01-F001-94455099-K7M2Q9XA4BHD",
+                                            "url": "https://www.tu-dominio.com/verificar/20000000001-01-F001-94455099-K7M2Q9XA4BHD",
+                                            "qr": "https://api.tu-dominio.com/v1/verificar/20000000001-01-F001-94455099-K7M2Q9XA4BHD/qr"
+                                        }
                                     },
                                     "request_id": "req_2b34bdbb48099d3b"
                                 }
@@ -1424,9 +1442,14 @@
                                         "archivos": {
                                             "xml": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/FIRMA/20000000001-01-F001-94455099.xml",
                                             "cdr": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/CDR/R-20000000001-01-F001-94455099.xml",
-                                            "pdf": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/PDF/20000000001-01-F001-94455099.pdf"
+                                            "pdf": "https://api.tu-dominio.com/v1/documentos/doc_0e7ded8531fd33aede36/pdf"
                                         },
-                                        "creado": "2026-11-11 22:45:01"
+                                        "creado": "2026-11-11 22:45:01",
+                                        "verificacion": {
+                                            "codigo": "20000000001-01-F001-94455099-K7M2Q9XA4BHD",
+                                            "url": "https://www.tu-dominio.com/verificar/20000000001-01-F001-94455099-K7M2Q9XA4BHD",
+                                            "qr": "https://api.tu-dominio.com/v1/verificar/20000000001-01-F001-94455099-K7M2Q9XA4BHD/qr"
+                                        }
                                     },
                                     "request_id": "req_5c9fdc752c96fc22"
                                 }
@@ -1477,9 +1500,14 @@
                                         "archivos": {
                                             "xml": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/FIRMA/20000000001-01-F001-94455099.xml",
                                             "cdr": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/CDR/R-20000000001-01-F001-94455099.xml",
-                                            "pdf": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/PDF/20000000001-01-F001-94455099.pdf"
+                                            "pdf": "https://api.tu-dominio.com/v1/documentos/doc_0e7ded8531fd33aede36/pdf"
                                         },
-                                        "creado": "2026-11-11 22:45:01"
+                                        "creado": "2026-11-11 22:45:01",
+                                        "verificacion": {
+                                            "codigo": "20000000001-01-F001-94455099-K7M2Q9XA4BHD",
+                                            "url": "https://www.tu-dominio.com/verificar/20000000001-01-F001-94455099-K7M2Q9XA4BHD",
+                                            "qr": "https://api.tu-dominio.com/v1/verificar/20000000001-01-F001-94455099-K7M2Q9XA4BHD/qr"
+                                        }
                                     },
                                     "request_id": "req_2b34bdbb48099d3b"
                                 }
@@ -2071,9 +2099,14 @@
                                         "archivos": {
                                             "xml": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/FIRMA/20000000001-01-F001-94455099.xml",
                                             "cdr": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/CDR/R-20000000001-01-F001-94455099.xml",
-                                            "pdf": "https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/PDF/20000000001-01-F001-94455099.pdf"
+                                            "pdf": "https://api.tu-dominio.com/v1/documentos/doc_0e7ded8531fd33aede36/pdf"
                                         },
-                                        "creado": "2026-11-11 22:45:01"
+                                        "creado": "2026-11-11 22:45:01",
+                                        "verificacion": {
+                                            "codigo": "20000000001-01-F001-94455099-K7M2Q9XA4BHD",
+                                            "url": "https://www.tu-dominio.com/verificar/20000000001-01-F001-94455099-K7M2Q9XA4BHD",
+                                            "qr": "https://api.tu-dominio.com/v1/verificar/20000000001-01-F001-94455099-K7M2Q9XA4BHD/qr"
+                                        }
                                     },
                                     "request_id": "req_x"
                                 }
@@ -2085,6 +2118,107 @@
                     },
                     "404": {
                         "$ref": "#/components/responses/R404"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
+                    }
+                }
+            }
+        },
+        "/documentos/{id}/pdf": {
+            "get": {
+                "tags": [
+                    "Historial"
+                ],
+                "operationId": "documentoPdf",
+                "summary": "PDF del comprobante (A4 o ticket)",
+                "description": "Genera **a pedido** el PDF (representación impresa) de una factura, boleta o nota de crédito/débito **aceptada por SUNAT**, con el logo, color y pie de página que la empresa configuró en su portal, el código QR estándar de SUNAT y el enlace de verificación. No se guarda ningún PDF: se genera desde el XML firmado, así que sirve para documentos de cualquier fecha.\n\nEs **opcional**: si su sistema ya imprime sus propios PDF, no necesita este endpoint. Requiere que el plan lo incluya (`403 pdf_no_incluido`).",
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ],
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "pattern": "^doc_[a-f0-9]{20}$"
+                        },
+                        "example": "doc_0e7ded8531fd33aede36"
+                    },
+                    {
+                        "name": "formato",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "enum": [
+                                "a4",
+                                "ticket"
+                            ]
+                        },
+                        "description": "Tamaño: `a4` (hoja completa) o `ticket` (80 mm, impresora térmica). Por defecto, el que la empresa eligió en su portal."
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "El PDF.",
+                        "content": {
+                            "application/pdf": {
+                                "schema": {
+                                    "type": "string",
+                                    "format": "binary"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "$ref": "#/components/responses/R401"
+                    },
+                    "403": {
+                        "$ref": "#/components/responses/R403"
+                    },
+                    "404": {
+                        "$ref": "#/components/responses/R404"
+                    },
+                    "409": {
+                        "description": "El documento no está aceptado por SUNAT (`documento_no_aceptado`): solo se genera PDF de documentos aceptados.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/Error"
+                                },
+                                "example": {
+                                    "ok": false,
+                                    "error": {
+                                        "code": "documento_no_aceptado",
+                                        "message": "El PDF solo se genera para documentos aceptados por SUNAT (estado actual: rechazado)."
+                                    },
+                                    "request_id": "req_a8122150f2caeaa0"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Formato inválido o tipo de documento sin PDF (`pdf_no_disponible`: solo 01, 03, 07 y 08).",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/Error"
+                                },
+                                "example": {
+                                    "ok": false,
+                                    "error": {
+                                        "code": "pdf_no_disponible",
+                                        "message": "Solo hay PDF de facturas, boletas y notas de crédito/débito."
+                                    },
+                                    "request_id": "req_a8122150f2caeaa0"
+                                }
+                            }
+                        }
                     },
                     "429": {
                         "$ref": "#/components/responses/R429"
@@ -3025,6 +3159,287 @@
                 }
             }
         },
+        "/verificar/{codigo}": {
+            "get": {
+                "tags": [
+                    "Verificación"
+                ],
+                "operationId": "verificarPorCodigo",
+                "summary": "Verificar un documento por su código",
+                "description": "Sin API key. Cualquiera que tenga el código (o escanee el QR) puede comprobar que el documento fue emitido por el servicio y el estado que informó SUNAT. **Solo devuelve datos públicos mínimos** (emisor, tipo, número, fecha, total, estado): nunca datos del comprador. `valido` es `true` únicamente si SUNAT aceptó el documento **en producción**. Límite: 60 consultas cada 10 minutos por dirección IP.",
+                "security": [],
+                "parameters": [
+                    {
+                        "name": "codigo",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "pattern": "^\\d{11}-(01|03|07|08|20|09)-[A-Z0-9]{1,8}-\\d{1,8}-[0-9A-Z]{12}$"
+                        },
+                        "description": "El código de verificación que devuelve la emisión en `data.verificacion.codigo` (`RUC-tipo-serie-número-código`).",
+                        "example": "20123456789-01-F001-150-K7M2Q9XA4BHD"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Documento encontrado.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/VerificacionPublica"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                },
+                                "example": {
+                                    "ok": true,
+                                    "data": {
+                                        "estado": "aceptado",
+                                        "valido": true,
+                                        "entorno": "produccion",
+                                        "emisor": {
+                                            "ruc": "20123456789",
+                                            "razon_social": "EMPRESA EJEMPLO S.A.C."
+                                        },
+                                        "tipo": "01",
+                                        "tipo_nombre": "Factura electrónica",
+                                        "serie": "F001",
+                                        "numero": "00000150",
+                                        "fecha_emision": "2026-11-13",
+                                        "total": "118.00",
+                                        "moneda": "PEN",
+                                        "sunat": {
+                                            "codigo": "0",
+                                            "descripcion": "La Factura numero F001-150, ha sido aceptada"
+                                        },
+                                        "hash": "DpL3Tb7gsOql6mMKZA61o3mQ7+Q=",
+                                        "verificacion": {
+                                            "codigo": "20123456789-01-F001-150-K7M2Q9XA4BHD",
+                                            "url": "https://www.tu-dominio.com/verificar/20123456789-01-F001-150-K7M2Q9XA4BHD",
+                                            "qr": "https://api.tu-dominio.com/v1/verificar/20123456789-01-F001-150-K7M2Q9XA4BHD/qr"
+                                        }
+                                    },
+                                    "request_id": "req_x"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "No se encontró un documento con esos datos. Es la **misma respuesta** si el código es incorrecto, el documento no existe, los datos no coinciden o la empresa no habilita la verificación pública.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/Error"
+                                },
+                                "example": {
+                                    "ok": false,
+                                    "error": {
+                                        "code": "no_encontrado",
+                                        "message": "No se encontro un documento con esos datos. Revise el enlace o que RUC, tipo, serie, numero, fecha y total sean exactos."
+                                    },
+                                    "request_id": "req_a8122150f2caeaa0"
+                                }
+                            }
+                        }
+                    },
+                    "405": {
+                        "$ref": "#/components/responses/R405"
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
+                    }
+                }
+            }
+        },
+        "/verificar/{codigo}/qr": {
+            "get": {
+                "tags": [
+                    "Verificación"
+                ],
+                "operationId": "verificarQr",
+                "summary": "Imagen QR del enlace de verificación",
+                "description": "Devuelve un **PNG** con el código QR que lleva a la página de verificación de ese documento. Úselo para imprimirlo en sus propios comprobantes (PDF o tickets), junto al QR estándar de SUNAT. Sin API key. Responde `404` si el código no es válido o la empresa no habilita la verificación pública.",
+                "security": [],
+                "parameters": [
+                    {
+                        "name": "codigo",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "pattern": "^\\d{11}-(01|03|07|08|20|09)-[A-Z0-9]{1,8}-\\d{1,8}-[0-9A-Z]{12}$"
+                        },
+                        "description": "El código de verificación que devuelve la emisión en `data.verificacion.codigo` (`RUC-tipo-serie-número-código`).",
+                        "example": "20123456789-01-F001-150-K7M2Q9XA4BHD"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Imagen PNG.",
+                        "content": {
+                            "image/png": {
+                                "schema": {
+                                    "type": "string",
+                                    "format": "binary"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "No se encontró un documento con esos datos. Es la **misma respuesta** si el código es incorrecto, el documento no existe, los datos no coinciden o la empresa no habilita la verificación pública.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/Error"
+                                },
+                                "example": {
+                                    "ok": false,
+                                    "error": {
+                                        "code": "no_encontrado",
+                                        "message": "No se encontro un documento con esos datos. Revise el enlace o que RUC, tipo, serie, numero, fecha y total sean exactos."
+                                    },
+                                    "request_id": "req_a8122150f2caeaa0"
+                                }
+                            }
+                        }
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
+                    }
+                }
+            }
+        },
+        "/verificar": {
+            "post": {
+                "tags": [
+                    "Verificación"
+                ],
+                "operationId": "verificarPorDatos",
+                "summary": "Verificar un documento por sus datos",
+                "description": "Sin API key. Para quien **no tiene el código ni el QR**: se envían RUC del emisor, tipo, serie, número, fecha de emisión y total, y **todos deben coincidir** exactamente. Sirve para facturas (`01`), boletas (`03`), notas (`07`, `08`) y retenciones (`20`) emitidas con datos de fecha y total guardados. Límite: 60 consultas cada 10 minutos por IP.",
+                "security": [],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/VerificacionRequest"
+                            },
+                            "example": {
+                                "ruc": "20123456789",
+                                "tipo": "01",
+                                "serie": "F001",
+                                "numero": "150",
+                                "fecha_emision": "2026-11-13",
+                                "total": "118.00"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Documento encontrado.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "$ref": "#/components/schemas/VerificacionPublica"
+                                        },
+                                        "request_id": {
+                                            "type": "string",
+                                            "description": "Identificador de la peticion (cite este valor al pedir soporte).",
+                                            "example": "req_5c9fdc752c96fc22"
+                                        }
+                                    },
+                                    "required": [
+                                        "ok",
+                                        "data",
+                                        "request_id"
+                                    ]
+                                },
+                                "example": {
+                                    "ok": true,
+                                    "data": {
+                                        "estado": "aceptado",
+                                        "valido": true,
+                                        "entorno": "produccion",
+                                        "emisor": {
+                                            "ruc": "20123456789",
+                                            "razon_social": "EMPRESA EJEMPLO S.A.C."
+                                        },
+                                        "tipo": "01",
+                                        "tipo_nombre": "Factura electrónica",
+                                        "serie": "F001",
+                                        "numero": "00000150",
+                                        "fecha_emision": "2026-11-13",
+                                        "total": "118.00",
+                                        "moneda": "PEN",
+                                        "sunat": {
+                                            "codigo": "0",
+                                            "descripcion": "La Factura numero F001-150, ha sido aceptada"
+                                        },
+                                        "hash": "DpL3Tb7gsOql6mMKZA61o3mQ7+Q=",
+                                        "verificacion": {
+                                            "codigo": "20123456789-01-F001-150-K7M2Q9XA4BHD",
+                                            "url": "https://www.tu-dominio.com/verificar/20123456789-01-F001-150-K7M2Q9XA4BHD",
+                                            "qr": "https://api.tu-dominio.com/v1/verificar/20123456789-01-F001-150-K7M2Q9XA4BHD/qr"
+                                        }
+                                    },
+                                    "request_id": "req_x"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "$ref": "#/components/responses/R400"
+                    },
+                    "404": {
+                        "description": "No se encontró un documento con esos datos. Es la **misma respuesta** si el código es incorrecto, el documento no existe, los datos no coinciden o la empresa no habilita la verificación pública.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/Error"
+                                },
+                                "example": {
+                                    "ok": false,
+                                    "error": {
+                                        "code": "no_encontrado",
+                                        "message": "No se encontro un documento con esos datos. Revise el enlace o que RUC, tipo, serie, numero, fecha y total sean exactos."
+                                    },
+                                    "request_id": "req_a8122150f2caeaa0"
+                                }
+                            }
+                        }
+                    },
+                    "429": {
+                        "$ref": "#/components/responses/R429"
+                    }
+                }
+            }
+        },
         "/uso": {
             "get": {
                 "tags": [
@@ -3128,7 +3543,9 @@
                 "schema": {
                     "type": "string",
                     "enum": [
-                        "archivos"
+                        "archivos",
+                        "pdf",
+                        "archivos,pdf"
                     ]
                 },
                 "description": "Con `archivos` la respuesta agrega `xml_base_64` y `cdr_base_64` (el XML firmado y la constancia de SUNAT) para guardarlos sin una segunda descarga."
@@ -3179,7 +3596,7 @@
                     },
                     "pdf": {
                         "type": "string",
-                        "description": "Enlace al PDF (si existe).",
+                        "description": "Dirección del PDF (`GET /documentos/{id}/pdf`; requiere su API key). Solo en documentos aceptados de tipo 01, 03, 07 y 08. El PDF se genera a pedido.",
                         "format": "uri"
                     },
                     "xml_base_64": {
@@ -3189,6 +3606,10 @@
                     "cdr_base_64": {
                         "type": "string",
                         "description": "Solo con `?incluir=archivos`: ZIP con el CDR, en base64."
+                    },
+                    "pdf_base_64": {
+                        "type": "string",
+                        "description": "Solo en la respuesta de una emisión con `?incluir=pdf`: el PDF en base64 (si su plan lo incluye)."
                     }
                 },
                 "description": "Los enlaces que aplican según el documento y su estado. Puede venir vacío (`{}`) si SUNAT lo rechazó o está pendiente."
@@ -3245,6 +3666,15 @@
                         "type": "string",
                         "description": "Fecha y hora (Lima) en que se registró.",
                         "example": "2026-11-11 22:45:01"
+                    },
+                    "verificacion": {
+                        "nullable": true,
+                        "allOf": [
+                            {
+                                "$ref": "#/components/schemas/Verificacion"
+                            }
+                        ],
+                        "description": "Enlace público para verificar este documento (null en resúmenes, bajas y reversiones)."
                     }
                 },
                 "required": [
@@ -3255,6 +3685,177 @@
                     "sunat",
                     "archivos",
                     "creado"
+                ]
+            },
+            "Verificacion": {
+                "type": "object",
+                "properties": {
+                    "codigo": {
+                        "type": "string",
+                        "description": "Código de verificación (`RUC-tipo-serie-número-código`). Es la parte que no se puede adivinar.",
+                        "example": "20123456789-01-F001-150-K7M2Q9XA4BHD"
+                    },
+                    "url": {
+                        "type": "string",
+                        "description": "Página pública de verificación de este documento. Póngala en sus comprobantes o correos.",
+                        "format": "uri"
+                    },
+                    "qr": {
+                        "type": "string",
+                        "description": "Imagen PNG del código QR de esa página (`GET /verificar/{codigo}/qr`).",
+                        "format": "uri"
+                    }
+                },
+                "required": [
+                    "codigo",
+                    "url",
+                    "qr"
+                ]
+            },
+            "VerificacionPublica": {
+                "type": "object",
+                "properties": {
+                    "estado": {
+                        "type": "string",
+                        "enum": [
+                            "aceptado",
+                            "rechazado",
+                            "pendiente",
+                            "no_validado"
+                        ],
+                        "description": "`aceptado`/`rechazado`: lo que respondió SUNAT. `pendiente`: SUNAT aún no confirma. `no_validado`: nunca llegó a ser validado por SUNAT."
+                    },
+                    "valido": {
+                        "type": "boolean",
+                        "description": "`true` solo si SUNAT aceptó el documento y es de **producción**."
+                    },
+                    "entorno": {
+                        "type": "string",
+                        "enum": [
+                            "prueba",
+                            "produccion"
+                        ],
+                        "description": "Los documentos de prueba (beta de SUNAT) no tienen validez tributaria."
+                    },
+                    "emisor": {
+                        "type": "object",
+                        "properties": {
+                            "ruc": {
+                                "type": "string",
+                                "description": "RUC del emisor."
+                            },
+                            "razon_social": {
+                                "type": "string",
+                                "description": "Razón social del emisor."
+                            }
+                        }
+                    },
+                    "tipo": {
+                        "type": "string",
+                        "description": "Código SUNAT del tipo de documento."
+                    },
+                    "tipo_nombre": {
+                        "type": "string",
+                        "description": "Nombre del tipo de documento."
+                    },
+                    "serie": {
+                        "type": "string",
+                        "description": "Serie."
+                    },
+                    "numero": {
+                        "type": "string",
+                        "description": "Número (8 dígitos)."
+                    },
+                    "fecha_emision": {
+                        "type": "string",
+                        "description": "Fecha de emisión (AAAA-MM-DD).",
+                        "nullable": true
+                    },
+                    "total": {
+                        "type": "string",
+                        "description": "Importe total con 2 decimales.",
+                        "nullable": true,
+                        "example": "118.00"
+                    },
+                    "moneda": {
+                        "type": "string",
+                        "description": "Moneda (PEN, USD).",
+                        "nullable": true
+                    },
+                    "sunat": {
+                        "nullable": true,
+                        "allOf": [
+                            {
+                                "$ref": "#/components/schemas/Sunat"
+                            }
+                        ]
+                    },
+                    "hash": {
+                        "type": "string",
+                        "description": "Huella (hash) de la firma digital.",
+                        "nullable": true
+                    },
+                    "verificacion": {
+                        "$ref": "#/components/schemas/Verificacion"
+                    }
+                },
+                "required": [
+                    "estado",
+                    "valido",
+                    "entorno",
+                    "emisor",
+                    "tipo",
+                    "serie",
+                    "numero"
+                ],
+                "description": "Datos públicos mínimos de un documento. Nunca incluye datos del comprador."
+            },
+            "VerificacionRequest": {
+                "type": "object",
+                "properties": {
+                    "ruc": {
+                        "type": "string",
+                        "description": "RUC del emisor (11 dígitos).",
+                        "example": "20123456789"
+                    },
+                    "tipo": {
+                        "type": "string",
+                        "enum": [
+                            "01",
+                            "03",
+                            "07",
+                            "08",
+                            "20"
+                        ]
+                    },
+                    "serie": {
+                        "type": "string",
+                        "description": "Serie.",
+                        "example": "F001"
+                    },
+                    "numero": {
+                        "type": "string",
+                        "description": "Número (150 y 00000150 son el mismo).",
+                        "example": "150"
+                    },
+                    "fecha_emision": {
+                        "type": "string",
+                        "description": "Fecha de emisión AAAA-MM-DD.",
+                        "example": "2026-11-13"
+                    },
+                    "total": {
+                        "type": "string",
+                        "description": "Importe total (hasta 2 decimales).",
+                        "example": "118.00"
+                    }
+                },
+                "required": [
+                    "ruc",
+                    "tipo",
+                    "serie",
+                    "numero",
+                    "fecha_emision",
+                    "total"
                 ]
             },
             "ErrorDetalle": {

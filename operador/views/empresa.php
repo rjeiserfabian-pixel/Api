@@ -34,6 +34,78 @@ $volverEmp = 'empresa';
   </div>
 </div>
 
+<h2>Suscripción y cobros</h2>
+<?php
+$cls = array('activa' => 'ok', 'prueba' => 'info', 'gracia' => 'espera', 'vencida' => 'mal');
+$planSel = $pre['plan_id'] > 0 ? $pre['plan_id'] : ($sus ? (int) $sus['plan_id'] : (int) $plan['id']);
+$montoSel = '';
+foreach ($planesTodos as $pt) {
+    if ((int) $pt['id'] === (int) $planSel) {
+        $montoSel = Dinero::paraCampo(Cobros::precioPeriodo($pt, $pre['periodo']));
+    }
+}
+?>
+<div class="tarjeta">
+  <?php if ($sus): ?>
+    <dl class="det">
+      <dt>Estado</dt><dd><span class="badge <?= h(isset($cls[$sus['estado']]) ? $cls[$sus['estado']] : 'info') ?>"><?= h($sus['estado']) ?></span></dd>
+      <dt>Plan / período</dt><dd><?= h($sus['plan']) ?> · <?= h($sus['periodo']) ?></dd>
+      <dt>Vence</dt><dd class="mono"><?= h(substr($sus['vence'], 0, 10)) ?><?= in_array($sus['estado'], array('activa', 'prueba'), true) ? ' (' . (int) Cobros::diasHasta($sus['vence']) . ' días)' : '' ?><?= $sus['estado'] === 'gracia' ? ' · gracia hasta ' . h(substr($sus['gracia_hasta'], 0, 10)) : '' ?></dd>
+      <dt>Prueba gratis</dt><dd><?= (int) $sus['prueba_usada'] === 1 ? 'ya usada' : 'disponible' ?></dd>
+    </dl>
+  <?php else: ?>
+    <p class="sin-margen">Sin suscripción: el plan está asignado a mano y <strong>no vence</strong>. Al registrar su primer pago o iniciar una prueba, pasa a tener fecha de vencimiento.</p>
+  <?php endif; ?>
+</div>
+
+<h2>Registrar un pago</h2>
+<form id="form-pago" class="tarjeta" method="post" action="<?= h(Vista::url('/empresas/' . (int) $e['id'] . '/pago')) ?>">
+  <input type="hidden" name="_csrf" value="<?= h($csrf) ?>">
+  <div class="form-plan">
+    <div><label for="pp">Plan</label>
+      <select id="pp" name="plan_id">
+        <?php foreach ($planesTodos as $pt): $pp = Cobros::precios($pt); ?>
+          <option value="<?= (int) $pt['id'] ?>" data-m="<?= h(Dinero::paraCampo($pp['mensual'])) ?>" data-a="<?= h(Dinero::paraCampo($pp['anual'])) ?>" <?= (int) $pt['id'] === (int) $planSel ? 'selected' : '' ?>><?= h($pt['nombre']) ?><?= $pp['mensual'] !== null ? ' — ' . h(Dinero::formato($pp['mensual'])) . '/mes' : '' ?></option>
+        <?php endforeach; ?>
+      </select></div>
+    <div><label for="pe">Período pagado</label>
+      <select id="pe" name="periodo"><option value="mensual" <?= $pre['periodo'] === 'mensual' ? 'selected' : '' ?>>Mensual (1 mes)</option><option value="anual" <?= $pre['periodo'] === 'anual' ? 'selected' : '' ?>>Anual (12 meses)</option></select></div>
+    <div><label for="pmo">Monto recibido (S/)</label><input id="pmo" type="text" name="monto" value="<?= h($montoSel) ?>" required inputmode="decimal" maxlength="12" placeholder="Ej. 99.90"></div>
+    <div><label for="pme">Método</label>
+      <select id="pme" name="metodo"><?php foreach (Cobros::$metodos as $k => $v): ?><option value="<?= h($k) ?>"><?= h($v) ?></option><?php endforeach; ?></select></div>
+    <div><label for="pre">Referencia (n.º de operación)</label><input id="pre" type="text" name="referencia" maxlength="80" placeholder="Evita registrar dos veces el mismo pago"></div>
+    <div><label for="pno">Nota (opcional)</label><input id="pno" type="text" name="nota" maxlength="200"></div>
+    <div><label for="pcl">Su contraseña</label><input id="pcl" type="password" name="clave_actual" required autocomplete="current-password" maxlength="128"></div>
+  </div>
+  <p><button type="submit">Registrar pago y activar</button></p>
+  <p class="ayuda">Mensual suma 1 mes y anual 12 meses. Si renueva a tiempo suma desde el vencimiento actual; si el plan es otro o ya venció, cuenta desde hoy. Con la misma referencia, el pago no se duplica.</p>
+</form>
+
+<h2>Prueba gratis</h2>
+<form class="tarjeta" method="post" action="<?= h(Vista::url('/empresas/' . (int) $e['id'] . '/prueba')) ?>">
+  <input type="hidden" name="_csrf" value="<?= h($csrf) ?>">
+  <div class="form-plan">
+    <div><label for="tp">Plan a probar</label>
+      <select id="tp" name="plan_id"><?php foreach ($planesTodos as $pt): ?><option value="<?= (int) $pt['id'] ?>"><?= h($pt['nombre']) ?><?= (int) $pt['dias_prueba'] > 0 ? ' (' . (int) $pt['dias_prueba'] . ' días)' : '' ?></option><?php endforeach; ?></select></div>
+    <div><label for="td">Días (vacío = los del plan)</label><input id="td" type="text" name="dias" inputmode="numeric" maxlength="3" placeholder="Ej. 14"></div>
+    <div><label for="tc">Su contraseña</label><input id="tc" type="password" name="clave_actual" required autocomplete="current-password" maxlength="128"></div>
+  </div>
+  <p><button class="suave" type="submit">Dar prueba gratis</button></p>
+  <p class="ayuda">El cliente solo puede iniciar una prueba por su cuenta; usted puede darla otra vez. No pisa una suscripción pagada vigente. Al terminar, pasa al plan de destino (ver Ajustes).</p>
+</form>
+
+<h2>Pagos de esta empresa</h2>
+<div class="tabla-scroll">
+<table>
+  <tr><th>Fecha</th><th>Plan</th><th>Período</th><th>Monto</th><th>Método</th><th>Referencia</th><th>Vence</th></tr>
+  <?php foreach ($pagos as $g): ?>
+    <tr><td class="mono"><?= h($g['creado']) ?></td><td><?= h($g['plan']) ?></td><td><?= h($g['periodo']) ?></td><td><strong><?= h(Dinero::formato($g['monto'])) ?></strong></td>
+      <td><?= h(isset(Cobros::$metodos[$g['metodo']]) ? Cobros::$metodos[$g['metodo']] : $g['metodo']) ?></td><td class="mono"><?= h($g['referencia']) ?></td><td class="mono"><?= h(substr((string) $g['vence_resultante'], 0, 10)) ?></td></tr>
+  <?php endforeach; ?>
+  <?php if (!$pagos): ?><tr><td colspan="7" class="ayuda">Aún no hay pagos de esta empresa.</td></tr><?php endif; ?>
+</table>
+</div>
+
 <h2>Asignar plan</h2>
 <div class="tarjeta">
   <?php if ($pendiente): ?>

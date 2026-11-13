@@ -31,6 +31,8 @@ $nombresW = array('activo' => 'Activo', 'demorado' => 'Lento', 'detenido' => 'DE
     <div class="ayuda"><?= (int) $sinUsuarios ?> empresas sin ningún usuario</div></div>
   <div class="tarjeta"><div class="etiqueta">Documentos en producción (<?= h($periodo) ?>)</div><div class="cifra"><?= (int) $docsMes ?></div>
     <div class="ayuda">Aceptados o en proceso, todas las empresas</div></div>
+  <div class="tarjeta"><div class="etiqueta">Contactos del sitio sin atender</div><div class="cifra"><?= (int) $nContactos ?></div>
+    <div class="ayuda"><a href="<?= h(Vista::url('/contactos')) ?>">Ver bandeja</a></div></div>
   <div class="tarjeta"><div class="etiqueta">Solicitudes de plan</div><div class="cifra"><?= (int) $nSolicitudes ?></div>
     <div class="ayuda"><a href="<?= h(Vista::url('/solicitudes')) ?>">Revisar</a></div></div>
 </div>

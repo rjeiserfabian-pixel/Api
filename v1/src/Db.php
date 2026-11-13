@@ -193,6 +193,43 @@ class Db
         if (!self::columnaExiste('planes', 'autoservicio')) {
             self::pdo()->exec('ALTER TABLE planes ADD COLUMN autoservicio INTEGER NOT NULL DEFAULT 0');
         }
+        // Planes en el sitio publico: texto de precio libre ("S/ 99 al mes", "Consultar") y si se muestra o no
+        if (!self::columnaExiste('planes', 'precio')) {
+            self::pdo()->exec('ALTER TABLE planes ADD COLUMN precio VARCHAR(40) NULL');
+        }
+        if (!self::columnaExiste('planes', 'publico')) {
+            self::pdo()->exec('ALTER TABLE planes ADD COLUMN publico INTEGER NOT NULL DEFAULT 1');
+        }
+        // Cobros: precio mensual en CENTIMOS (null = sin precio definido), descuento por pago anual (%) y dias de prueba gratis
+        if (!self::columnaExiste('planes', 'precio_mensual')) {
+            self::pdo()->exec('ALTER TABLE planes ADD COLUMN precio_mensual INTEGER NULL');
+        }
+        if (!self::columnaExiste('planes', 'descuento_anual')) {
+            self::pdo()->exec('ALTER TABLE planes ADD COLUMN descuento_anual INTEGER NOT NULL DEFAULT 0');
+        }
+        if (!self::columnaExiste('planes', 'dias_prueba')) {
+            self::pdo()->exec('ALTER TABLE planes ADD COLUMN dias_prueba INTEGER NOT NULL DEFAULT 0');
+        }
+        if (!self::columnaExiste('solicitudes_plan', 'periodo')) {
+            self::pdo()->exec('ALTER TABLE solicitudes_plan ADD COLUMN periodo VARCHAR(10) NULL');
+        }
+        // Verificacion publica de documentos: datos que se comparan en la consulta manual (el total va en CENTIMOS) y permiso por empresa
+        foreach (array('fecha_emision' => 'VARCHAR(10) NULL', 'total' => 'INTEGER NULL', 'moneda' => 'VARCHAR(3) NULL') as $col => $def) {
+            if (!self::columnaExiste('documentos', $col)) {
+                self::pdo()->exec('ALTER TABLE documentos ADD COLUMN ' . $col . ' ' . $def);
+            }
+        }
+        if (!self::columnaExiste('empresas', 'verificacion_publica')) {
+            self::pdo()->exec('ALTER TABLE empresas ADD COLUMN verificacion_publica INTEGER NOT NULL DEFAULT 1');
+        }
+        // PDF propio de la API: datos que NO viajan en el XML y hacen falta para imprimir (direccion del cliente, observaciones),
+        // y si el plan incluye el PDF
+        if (!self::columnaExiste('documentos', 'extra_impresion')) {
+            self::pdo()->exec('ALTER TABLE documentos ADD COLUMN extra_impresion TEXT NULL');
+        }
+        if (!self::columnaExiste('planes', 'incluye_pdf')) {
+            self::pdo()->exec('ALTER TABLE planes ADD COLUMN incluye_pdf INTEGER NOT NULL DEFAULT 1');
+        }
     }
 
     /** Si falta el esquema nuevo (despues de actualizar el codigo), lo crea. Barato: 2 consultas. */
@@ -211,6 +248,18 @@ class Db
             self::pdo()->query('SELECT autoservicio FROM planes LIMIT 1');
             self::pdo()->query('SELECT 1 FROM operadores LIMIT 1');
             self::pdo()->query('SELECT 1 FROM solicitudes_plan LIMIT 1');
+            self::pdo()->query('SELECT precio, publico FROM planes LIMIT 1');
+            self::pdo()->query('SELECT 1 FROM contactos LIMIT 1');
+            self::pdo()->query('SELECT precio_mensual, descuento_anual, dias_prueba FROM planes LIMIT 1');
+            self::pdo()->query('SELECT periodo FROM solicitudes_plan LIMIT 1');
+            self::pdo()->query('SELECT 1 FROM suscripciones LIMIT 1');
+            self::pdo()->query('SELECT 1 FROM pagos LIMIT 1');
+            self::pdo()->query('SELECT 1 FROM ajustes LIMIT 1');
+            self::pdo()->query('SELECT fecha_emision, total, moneda FROM documentos LIMIT 1');
+            self::pdo()->query('SELECT verificacion_publica FROM empresas LIMIT 1');
+            self::pdo()->query('SELECT extra_impresion FROM documentos LIMIT 1');
+            self::pdo()->query('SELECT incluye_pdf FROM planes LIMIT 1');
+            self::pdo()->query('SELECT 1 FROM pdf_config LIMIT 1');
         } catch (PDOException $e) {
             self::crearEsquema();
         }
@@ -431,6 +480,72 @@ class Db
         )");
         self::indice('CREATE INDEX idx_solicitudes_estado ON solicitudes_plan (estado, id)');
         self::indice('CREATE INDEX idx_solicitudes_empresa ON solicitudes_plan (empresa_id, id)');
+
+        // Sitio publico: solicitudes de contacto (las ve el operador en su panel)
+        $pdo->exec("CREATE TABLE IF NOT EXISTS contactos (
+            id $pk,
+            nombre VARCHAR(120) NOT NULL,
+            email VARCHAR(190) NOT NULL,
+            empresa VARCHAR(150) NULL,
+            telefono VARCHAR(30) NULL,
+            interes VARCHAR(60) NULL,
+            mensaje VARCHAR(1000) NULL,
+            estado VARCHAR(10) NOT NULL DEFAULT 'nuevo',
+            ip VARCHAR(45) NULL,
+            creado VARCHAR(19) NOT NULL
+        )");
+        self::indice('CREATE INDEX idx_contactos_estado ON contactos (estado, id)');
+
+        // Cobros: una suscripcion por empresa (la "vigente"), historial de pagos y ajustes configurables del servicio
+        $pdo->exec("CREATE TABLE IF NOT EXISTS suscripciones (
+            id $pk,
+            empresa_id INTEGER NOT NULL,
+            plan_id INTEGER NOT NULL,
+            periodo VARCHAR(10) NOT NULL,
+            estado VARCHAR(10) NOT NULL,
+            inicio VARCHAR(19) NOT NULL,
+            vence VARCHAR(19) NOT NULL,
+            gracia_hasta VARCHAR(19) NULL,
+            prueba_usada INTEGER NOT NULL DEFAULT 0,
+            actualizado VARCHAR(19) NOT NULL,
+            creado VARCHAR(19) NOT NULL
+        )");
+        self::indice('CREATE UNIQUE INDEX idx_susc_empresa ON suscripciones (empresa_id)');
+        self::indice('CREATE INDEX idx_susc_estado ON suscripciones (estado, vence)');
+        $pdo->exec("CREATE TABLE IF NOT EXISTS pagos (
+            id $pk,
+            empresa_id INTEGER NOT NULL,
+            plan_id INTEGER NOT NULL,
+            periodo VARCHAR(10) NOT NULL,
+            monto INTEGER NOT NULL,
+            moneda VARCHAR(3) NOT NULL DEFAULT 'PEN',
+            metodo VARCHAR(30) NOT NULL,
+            referencia VARCHAR(80) NULL,
+            nota VARCHAR(200) NULL,
+            registrado_por VARCHAR(190) NULL,
+            vence_resultante VARCHAR(19) NULL,
+            creado VARCHAR(19) NOT NULL
+        )");
+        self::indice('CREATE UNIQUE INDEX idx_pagos_ref ON pagos (metodo, referencia)');
+        self::indice('CREATE INDEX idx_pagos_empresa ON pagos (empresa_id, id)');
+        // Personalizacion del PDF por empresa (el logo vive en storage/logos/<empresa_id>.png: fuera del alcance web)
+        $pdo->exec("CREATE TABLE IF NOT EXISTS pdf_config (
+            id $pk,
+            empresa_id INTEGER NOT NULL,
+            color VARCHAR(7) NOT NULL DEFAULT '#1d4ed8',
+            formato VARCHAR(6) NOT NULL DEFAULT 'a4',
+            pie VARCHAR(300) NULL,
+            contacto VARCHAR(200) NULL,
+            logo INTEGER NOT NULL DEFAULT 0,
+            mostrar_verificacion INTEGER NOT NULL DEFAULT 1,
+            actualizado VARCHAR(19) NOT NULL
+        )");
+        self::indice('CREATE UNIQUE INDEX idx_pdfcfg_empresa ON pdf_config (empresa_id)');
+        $pdo->exec("CREATE TABLE IF NOT EXISTS ajustes (
+            id $pk,
+            clave VARCHAR(60) NOT NULL UNIQUE,
+            valor VARCHAR(600) NULL
+        )");
 
         self::migrar();
     }

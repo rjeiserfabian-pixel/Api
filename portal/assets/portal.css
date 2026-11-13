@@ -64,3 +64,15 @@ dl.det { display: grid; grid-template-columns: 180px 1fr; gap: 6px 14px; margin:
   .lateral nav { display: flex; flex-wrap: wrap; gap: 4px; } .contenido { padding: 14px; } dl.det { grid-template-columns: 1fr; } }
 .sin-margen { margin-top: 0; }
 label.check { display: inline; font-weight: 400; }
+
+/* formularios dentro de tablas (plan) */
+td form { margin: 0 0 6px; }
+td select { width: auto; max-width: 110px; padding: 5px 8px; }
+td input[type=password] { max-width: 140px; padding: 5px 8px; }
+
+.qr-verif { display: block; margin: 8px 0; background: #fff; padding: 4px; border: 1px solid var(--linea); border-radius: 8px; }
+
+/* comprobantes PDF */
+.logo-actual { max-width: 260px; max-height: 110px; background: #fff; border: 1px solid var(--linea); border-radius: 8px; padding: 6px; }
+input.selector-color { width: 70px; height: 40px; padding: 2px; cursor: pointer; }
+textarea { width: 100%; max-width: 640px; padding: 9px 11px; border: 1px solid var(--linea); border-radius: 8px; background: var(--bg); color: var(--texto); font: inherit; }

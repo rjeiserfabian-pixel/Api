@@ -8,6 +8,20 @@
     <dt>Último acceso</dt><dd class="mono"><?= h($usuario['ultimo_acceso'] ? $usuario['ultimo_acceso'] : '—') ?></dd>
   </dl>
 </div>
+<h2>Verificación pública de sus documentos</h2>
+<div class="tarjeta">
+  <p class="sin-margen">Estado actual: <strong><?= $verifPublica ? 'ACTIVADA' : 'DESACTIVADA' ?></strong>.</p>
+  <p class="ayuda">Con la verificación activa, quien reciba un comprobante suyo puede comprobar en la página pública que es auténtico (emisor, número, fecha, total y estado según SUNAT) usando el enlace o código QR del documento. Nunca se muestran datos de sus clientes. Si la desactiva, esos enlaces dejan de mostrar información.</p>
+  <?php if ($esAdmin): ?>
+  <form method="post" action="<?= h(Vista::url('/cuenta/verificacion')) ?>">
+    <input type="hidden" name="_csrf" value="<?= h($csrf) ?>">
+    <input type="hidden" name="activa" value="<?= $verifPublica ? '0' : '1' ?>">
+    <label for="vc">Su contraseña (por seguridad)</label>
+    <input id="vc" type="password" name="clave_actual" required autocomplete="current-password" maxlength="128">
+    <p><button class="<?= $verifPublica ? 'suave' : '' ?>" type="submit"><?= $verifPublica ? 'Desactivar verificación pública' : 'Activar verificación pública' ?></button></p>
+  </form>
+  <?php else: ?><p class="ayuda">Solo un administrador de su empresa puede cambiarlo.</p><?php endif; ?>
+</div>
 <h2>Cambiar contraseña</h2>
 <div class="tarjeta">
   <form method="post" action="<?= h(Vista::url('/cuenta/clave')) ?>">

@@ -32,7 +32,9 @@ $docEj = array('id' => 'doc_0e7ded8531fd33aede36', 'tipo' => '01', 'serie' => 'F
     'sunat' => array('codigo' => '0', 'descripcion' => 'La Factura numero F001-94455099, ha sido aceptada'), 'ticket' => null, 'hash' => 'DpL3Tb7gsOql6mMKZA61o3mQ7+Q=',
     'archivos' => array('xml' => 'https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/FIRMA/20000000001-01-F001-94455099.xml',
         'cdr' => 'https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/CDR/R-20000000001-01-F001-94455099.xml',
-        'pdf' => 'https://tu-dominio.com/API_SUNAT/files/facturacion_electronica/PDF/20000000001-01-F001-94455099.pdf'), 'creado' => '2026-11-11 22:45:01');
+        'pdf' => 'https://api.tu-dominio.com/v1/documentos/doc_0e7ded8531fd33aede36/pdf'), 'creado' => '2026-11-11 22:45:01',
+    'verificacion' => array('codigo' => '20000000001-01-F001-94455099-K7M2Q9XA4BHD', 'url' => 'https://www.tu-dominio.com/verificar/20000000001-01-F001-94455099-K7M2Q9XA4BHD',
+        'qr' => 'https://api.tu-dominio.com/v1/verificar/20000000001-01-F001-94455099-K7M2Q9XA4BHD/qr'));
 $rechazadoEj = array_merge($docEj, array('estado' => 'rechazado', 'sunat' => array('codigo' => 'soap-env:Client.3267',
     'descripcion' => 'Fecha del pago unico o de las cuotas no puede ser anterior o igual a la fecha de emision del comprobante'), 'hash' => null, 'archivos' => new stdClass()));
 $pendienteEj = array('id' => 'doc_d62d20ffb272192ca6b0', 'tipo' => 'RC', 'serie' => '20261111', 'numero' => '73064', 'entorno' => 'prueba', 'estado' => 'pendiente',
@@ -53,7 +55,7 @@ $cabIdem = array('Idempotent-Replay' => array('description' => 'true cuando se d
 $params = array(
     'IdempotencyKey' => array('name' => 'Idempotency-Key', 'in' => 'header', 'required' => false, 'schema' => array('type' => 'string', 'pattern' => '^[A-Za-z0-9._\\-]{1,64}$'),
         'description' => 'Clave unica por operacion (hasta 64 caracteres: letras, numeros, . _ -). Si la peticion se repite con la misma clave y el mismo cuerpo, se devuelve el resultado guardado (200 + cabecera Idempotent-Replay) sin volver a enviar a SUNAT. Con la misma clave y otro cuerpo responde 409. **Recomendado siempre** para poder reintentar tras un corte de red.', 'example' => 'venta-12345'),
-    'Incluir' => array('name' => 'incluir', 'in' => 'query', 'required' => false, 'schema' => array('type' => 'string', 'enum' => array('archivos')),
+    'Incluir' => array('name' => 'incluir', 'in' => 'query', 'required' => false, 'schema' => array('type' => 'string', 'enum' => array('archivos', 'pdf', 'archivos,pdf')),
         'description' => 'Con `archivos` la respuesta agrega `xml_base_64` y `cdr_base_64` (el XML firmado y la constancia de SUNAT) para guardarlos sin una segunda descarga.'),
 );
 
@@ -82,8 +84,9 @@ $s = array();
 $s['Estado'] = array('type' => 'string', 'enum' => array('aceptado', 'rechazado', 'pendiente', 'simulado', 'reservado', 'procesando', 'error'),
     'description' => "- `aceptado`: SUNAT aceptó el documento (tiene CDR).\n- `rechazado`: SUNAT lo rechazó; `sunat.codigo` y `sunat.descripcion` explican el motivo. **El HTTP sigue siendo 201**: el rechazo es un resultado de negocio, no un error de la API. Corrija los datos y envíe de nuevo.\n- `pendiente`: SUNAT lo recibió y devolvió un `ticket`; consulte el resultado con `POST /tickets`.\n- `simulado`: solo con llave `test` en guías de remisión: se generó y firmó pero **no se envió** (SUNAT no tiene entorno de pruebas para guías).\n- `reservado`: número apartado con `POST /series/reservar` que todavía no se envió a SUNAT.\n- `procesando`: la API lo está enviando, o un intento anterior se interrumpió; reintente con la **misma** `Idempotency-Key`.\n- `error`: el envío falló antes de recibir respuesta de SUNAT (por ejemplo, SUNAT caído). **El número queda guardado**. Si el envío llegó con `Idempotency-Key`, **la API lo reintenta sola** (1 min, 5 min, 15 min, 1 h, 3 h, 6 h y 12 h) y avisa por webhook; también puede reintentarlo usted con la misma clave.");
 $s['Sunat'] = obj(array('codigo' => str('Código de SUNAT (`0` = aceptado) o un código interno.', array('nullable' => true, 'example' => '0')), 'descripcion' => str('Mensaje de SUNAT.', array('nullable' => true))));
-$s['Archivos'] = obj(array('xml' => str('Enlace al XML firmado.', array('format' => 'uri')), 'cdr' => str('Enlace a la Constancia de Recepción (CDR) de SUNAT.', array('format' => 'uri')), 'pdf' => str('Enlace al PDF (si existe).', array('format' => 'uri')),
-    'xml_base_64' => str('Solo con `?incluir=archivos`: ZIP con el XML firmado, en base64.'), 'cdr_base_64' => str('Solo con `?incluir=archivos`: ZIP con el CDR, en base64.')),
+$s['Archivos'] = obj(array('xml' => str('Enlace al XML firmado.', array('format' => 'uri')), 'cdr' => str('Enlace a la Constancia de Recepción (CDR) de SUNAT.', array('format' => 'uri')), 'pdf' => str('Dirección del PDF (`GET /documentos/{id}/pdf`; requiere su API key). Solo en documentos aceptados de tipo 01, 03, 07 y 08. El PDF se genera a pedido.', array('format' => 'uri')),
+    'xml_base_64' => str('Solo con `?incluir=archivos`: ZIP con el XML firmado, en base64.'), 'cdr_base_64' => str('Solo con `?incluir=archivos`: ZIP con el CDR, en base64.'),
+    'pdf_base_64' => str('Solo en la respuesta de una emisión con `?incluir=pdf`: el PDF en base64 (si su plan lo incluye).')),
     array(), 'Los enlaces que aplican según el documento y su estado. Puede venir vacío (`{}`) si SUNAT lo rechazó o está pendiente.');
 $s['Documento'] = obj(array(
     'id' => str('Identificador del documento en esta API.', array('example' => 'doc_0e7ded8531fd33aede36')),
@@ -94,8 +97,31 @@ $s['Documento'] = obj(array(
     'estado' => ref('Estado'), 'sunat' => ref('Sunat'),
     'ticket' => str('Ticket de SUNAT (resumen, baja, reversión, guía) o null.', array('nullable' => true)),
     'hash' => str('Valor resumen (hash) de la firma digital del XML.', array('nullable' => true)),
-    'archivos' => ref('Archivos'), 'creado' => str('Fecha y hora (Lima) en que se registró.', array('example' => '2026-11-11 22:45:01'))),
+    'archivos' => ref('Archivos'), 'creado' => str('Fecha y hora (Lima) en que se registró.', array('example' => '2026-11-11 22:45:01')),
+    'verificacion' => array('nullable' => true, 'allOf' => array(ref('Verificacion')), 'description' => 'Enlace público para verificar este documento (null en resúmenes, bajas y reversiones).')),
     array('id', 'tipo', 'entorno', 'estado', 'sunat', 'archivos', 'creado'));
+$s['Verificacion'] = obj(array(
+    'codigo' => str('Código de verificación (`RUC-tipo-serie-número-código`). Es la parte que no se puede adivinar.', array('example' => '20123456789-01-F001-150-K7M2Q9XA4BHD')),
+    'url' => str('Página pública de verificación de este documento. Póngala en sus comprobantes o correos.', array('format' => 'uri')),
+    'qr' => str('Imagen PNG del código QR de esa página (`GET /verificar/{codigo}/qr`).', array('format' => 'uri'))), array('codigo', 'url', 'qr'));
+$s['VerificacionPublica'] = obj(array(
+    'estado' => array('type' => 'string', 'enum' => array('aceptado', 'rechazado', 'pendiente', 'no_validado'), 'description' => '`aceptado`/`rechazado`: lo que respondió SUNAT. `pendiente`: SUNAT aún no confirma. `no_validado`: nunca llegó a ser validado por SUNAT.'),
+    'valido' => array('type' => 'boolean', 'description' => '`true` solo si SUNAT aceptó el documento y es de **producción**.'),
+    'entorno' => array('type' => 'string', 'enum' => array('prueba', 'produccion'), 'description' => 'Los documentos de prueba (beta de SUNAT) no tienen validez tributaria.'),
+    'emisor' => obj(array('ruc' => str('RUC del emisor.'), 'razon_social' => str('Razón social del emisor.'))),
+    'tipo' => str('Código SUNAT del tipo de documento.'), 'tipo_nombre' => str('Nombre del tipo de documento.'),
+    'serie' => str('Serie.'), 'numero' => str('Número (8 dígitos).'),
+    'fecha_emision' => str('Fecha de emisión (AAAA-MM-DD).', array('nullable' => true)),
+    'total' => str('Importe total con 2 decimales.', array('nullable' => true, 'example' => '118.00')), 'moneda' => str('Moneda (PEN, USD).', array('nullable' => true)),
+    'sunat' => array('nullable' => true, 'allOf' => array(ref('Sunat'))),
+    'hash' => str('Huella (hash) de la firma digital.', array('nullable' => true)),
+    'verificacion' => ref('Verificacion')), array('estado', 'valido', 'entorno', 'emisor', 'tipo', 'serie', 'numero'),
+    'Datos públicos mínimos de un documento. Nunca incluye datos del comprador.');
+$s['VerificacionRequest'] = obj(array(
+    'ruc' => str('RUC del emisor (11 dígitos).', array('example' => '20123456789')), 'tipo' => array('type' => 'string', 'enum' => array('01', '03', '07', '08', '20')),
+    'serie' => str('Serie.', array('example' => 'F001')), 'numero' => str('Número (150 y 00000150 son el mismo).', array('example' => '150')),
+    'fecha_emision' => str('Fecha de emisión AAAA-MM-DD.', array('example' => '2026-11-13')), 'total' => str('Importe total (hasta 2 decimales).', array('example' => '118.00'))),
+    array('ruc', 'tipo', 'serie', 'numero', 'fecha_emision', 'total'));
 $s['ErrorDetalle'] = obj(array('campo' => str('Ruta del campo con problema.', array('example' => 'venta.serie')), 'mensaje' => str('Qué corregir.')), array('campo', 'mensaje'));
 $s['Error'] = obj(array('ok' => array('type' => 'boolean', 'example' => false),
     'error' => obj(array('code' => str('Código estable para programar la respuesta (ver tabla en la descripción general).', array('example' => 'validacion')),
@@ -257,6 +283,16 @@ $paths['/documentos/{id}'] = array('get' => array('tags' => array('Historial'), 
     'parameters' => array(array('name' => 'id', 'in' => 'path', 'required' => true, 'schema' => array('type' => 'string', 'pattern' => '^doc_[a-f0-9]{20}$'), 'example' => 'doc_0e7ded8531fd33aede36')),
     'responses' => array('200' => resp('El documento.', envelope(ref('Documento')), array('ok' => true, 'data' => $docEj, 'request_id' => 'req_x')), '401' => err('R401'), '404' => err('R404'))));
 
+$paths['/documentos/{id}/pdf'] = array('get' => array('tags' => array('Historial'), 'operationId' => 'documentoPdf', 'summary' => 'PDF del comprobante (A4 o ticket)',
+    'description' => "Genera **a pedido** el PDF (representación impresa) de una factura, boleta o nota de crédito/débito **aceptada por SUNAT**, con el logo, color y pie de página que la empresa configuró en su portal, el código QR estándar de SUNAT y el enlace de verificación. No se guarda ningún PDF: se genera desde el XML firmado, así que sirve para documentos de cualquier fecha.\n\nEs **opcional**: si su sistema ya imprime sus propios PDF, no necesita este endpoint. Requiere que el plan lo incluya (`403 pdf_no_incluido`).",
+    'security' => $seg,
+    'parameters' => array(array('name' => 'id', 'in' => 'path', 'required' => true, 'schema' => array('type' => 'string', 'pattern' => '^doc_[a-f0-9]{20}$'), 'example' => 'doc_0e7ded8531fd33aede36'),
+        array('name' => 'formato', 'in' => 'query', 'required' => false, 'schema' => array('type' => 'string', 'enum' => array('a4', 'ticket')), 'description' => 'Tamaño: `a4` (hoja completa) o `ticket` (80 mm, impresora térmica). Por defecto, el que la empresa eligió en su portal.')),
+    'responses' => array('200' => array('description' => 'El PDF.', 'content' => array('application/pdf' => array('schema' => array('type' => 'string', 'format' => 'binary')))),
+        '401' => err('R401'), '403' => err('R403'), '404' => err('R404'),
+        '409' => resp('El documento no está aceptado por SUNAT (`documento_no_aceptado`): solo se genera PDF de documentos aceptados.', ref('Error'), errEj('documento_no_aceptado', 'El PDF solo se genera para documentos aceptados por SUNAT (estado actual: rechazado).')),
+        '422' => resp('Formato inválido o tipo de documento sin PDF (`pdf_no_disponible`: solo 01, 03, 07 y 08).', ref('Error'), errEj('pdf_no_disponible', 'Solo hay PDF de facturas, boletas y notas de crédito/débito.')))));
+
 // ---------------- Series y numeracion ----------------
 $tiposSerie = array('01', '03', '07', '08', '20', '09');
 $s['SerieRequest'] = obj(array(
@@ -357,6 +393,30 @@ $s['Uso'] = obj(array(
     'porcentaje' => num('Porcentaje de la cuota consumido.', array('nullable' => true, 'example' => 24)),
     'reinicia' => str('Cuando se reinicia la cuota (primer dia del mes siguiente).', array('format' => 'date-time')),
     'nota' => str('Que consume cuota.')), array('plan', 'periodo', 'documentos_usados', 'reinicia'));
+// ---- Verificacion publica (sin API key) ----
+$esquemaVerificacionPublica = ref('VerificacionPublica');
+$ejVerif = array('ok' => true, 'data' => array('estado' => 'aceptado', 'valido' => true, 'entorno' => 'produccion', 'emisor' => array('ruc' => '20123456789', 'razon_social' => 'EMPRESA EJEMPLO S.A.C.'),
+    'tipo' => '01', 'tipo_nombre' => 'Factura electrónica', 'serie' => 'F001', 'numero' => '00000150', 'fecha_emision' => '2026-11-13', 'total' => '118.00', 'moneda' => 'PEN',
+    'sunat' => array('codigo' => '0', 'descripcion' => 'La Factura numero F001-150, ha sido aceptada'), 'hash' => 'DpL3Tb7gsOql6mMKZA61o3mQ7+Q=',
+    'verificacion' => array('codigo' => '20123456789-01-F001-150-K7M2Q9XA4BHD', 'url' => 'https://www.tu-dominio.com/verificar/20123456789-01-F001-150-K7M2Q9XA4BHD',
+        'qr' => 'https://api.tu-dominio.com/v1/verificar/20123456789-01-F001-150-K7M2Q9XA4BHD/qr')), 'request_id' => 'req_x');
+$pCodigo = array('name' => 'codigo', 'in' => 'path', 'required' => true, 'schema' => array('type' => 'string', 'pattern' => '^\\d{11}-(01|03|07|08|20|09)-[A-Z0-9]{1,8}-\\d{1,8}-[0-9A-Z]{12}$'),
+    'description' => 'El código de verificación que devuelve la emisión en `data.verificacion.codigo` (`RUC-tipo-serie-número-código`).', 'example' => '20123456789-01-F001-150-K7M2Q9XA4BHD');
+$noEnc = resp('No se encontró un documento con esos datos. Es la **misma respuesta** si el código es incorrecto, el documento no existe, los datos no coinciden o la empresa no habilita la verificación pública.', ref('Error'), errEj('no_encontrado', 'No se encontro un documento con esos datos. Revise el enlace o que RUC, tipo, serie, numero, fecha y total sean exactos.'));
+$paths['/verificar/{codigo}'] = array('get' => array('tags' => array('Verificación'), 'operationId' => 'verificarPorCodigo', 'summary' => 'Verificar un documento por su código',
+    'description' => 'Sin API key. Cualquiera que tenga el código (o escanee el QR) puede comprobar que el documento fue emitido por el servicio y el estado que informó SUNAT. **Solo devuelve datos públicos mínimos** (emisor, tipo, número, fecha, total, estado): nunca datos del comprador. `valido` es `true` únicamente si SUNAT aceptó el documento **en producción**. Límite: 60 consultas cada 10 minutos por dirección IP.',
+    'security' => array(), 'parameters' => array($pCodigo),
+    'responses' => array('200' => resp('Documento encontrado.', envelope($esquemaVerificacionPublica), $ejVerif), '404' => $noEnc, '405' => err('R405'), '429' => err('R429'))));
+$paths['/verificar/{codigo}/qr'] = array('get' => array('tags' => array('Verificación'), 'operationId' => 'verificarQr', 'summary' => 'Imagen QR del enlace de verificación',
+    'description' => 'Devuelve un **PNG** con el código QR que lleva a la página de verificación de ese documento. Úselo para imprimirlo en sus propios comprobantes (PDF o tickets), junto al QR estándar de SUNAT. Sin API key. Responde `404` si el código no es válido o la empresa no habilita la verificación pública.',
+    'security' => array(), 'parameters' => array($pCodigo),
+    'responses' => array('200' => array('description' => 'Imagen PNG.', 'content' => array('image/png' => array('schema' => array('type' => 'string', 'format' => 'binary')))), '404' => $noEnc, '429' => err('R429'))));
+$paths['/verificar'] = array('post' => array('tags' => array('Verificación'), 'operationId' => 'verificarPorDatos', 'summary' => 'Verificar un documento por sus datos',
+    'description' => 'Sin API key. Para quien **no tiene el código ni el QR**: se envían RUC del emisor, tipo, serie, número, fecha de emisión y total, y **todos deben coincidir** exactamente. Sirve para facturas (`01`), boletas (`03`), notas (`07`, `08`) y retenciones (`20`) emitidas con datos de fecha y total guardados. Límite: 60 consultas cada 10 minutos por IP.',
+    'security' => array(), 'requestBody' => array('required' => true, 'content' => array('application/json' => array('schema' => ref('VerificacionRequest'),
+        'example' => array('ruc' => '20123456789', 'tipo' => '01', 'serie' => 'F001', 'numero' => '150', 'fecha_emision' => '2026-11-13', 'total' => '118.00')))),
+    'responses' => array('200' => resp('Documento encontrado.', envelope($esquemaVerificacionPublica), $ejVerif), '400' => err('R400'), '404' => $noEnc, '429' => err('R429'))));
+
 $paths['/uso'] = array('get' => array('tags' => array('Sistema'), 'operationId' => 'uso', 'summary' => 'Plan, consumo del mes y limites',
     'description' => 'Su plan, cuantos documentos lleva este mes, cuantos le quedan y cuando se reinicia la cuota, y sus limites de velocidad. Consultar el uso es gratis y no consume cuota. **El consumo es el de produccion (`live`) aunque use una llave de prueba.**', 'security' => $seg,
     'responses' => array('200' => resp('Plan y consumo.', envelope(ref('Uso')), array('ok' => true, 'data' => array('plan' => array('nombre' => 'Basico', 'cuota_mensual' => 500, 'limite_emisiones_por_minuto' => 20, 'limite_peticiones_por_minuto' => 120, 'max_webhooks' => 2),
@@ -481,6 +541,16 @@ Consulte su consumo con `GET /uso`; las respuestas de emisión (`live`) traen `X
 - La consulta de tickets depende del servicio de SUNAT, que puede demorar o no responder (`504 tiempo_agotado`).
 - Los tickets de **guías** se consultan solos hasta resolverse; los de **resumen, baja y reversión** se siguen consultando con `POST /tickets` (todavía no se resuelven solos).
 - Los avisos se entregan **al menos una vez** (pueden repetirse) y sin garantía de orden entre documentos distintos.
+- **PDF (opcional):** la API entrega el XML firmado y el CDR. Si lo necesita, también genera la **representación impresa en PDF** (A4 o ticket de 80 mm) con el logo y los colores de cada empresa: `GET /documentos/{id}/pdf`, o `?incluir=pdf` al emitir (llega como `pdf_base_64`). Si su sistema ya imprime sus propios PDF, ignórelo.
+
+## Verificación pública de documentos
+Cada documento (factura, boleta, notas, retención y guía) trae en `data.verificacion` un **enlace público** y un **código QR** para que cualquiera pueda comprobar que fue emitido por el servicio y ver el estado que informó SUNAT, **sin necesidad de API key**:
+
+- `verificacion.url`: la página pública de verificación de ese documento.
+- `verificacion.qr`: imagen PNG del QR de esa página, para **imprimirla en sus propios comprobantes** (PDF o tickets) junto al QR estándar de SUNAT. (El PDF que genera la API ya lo incluye.)
+- `GET /verificar/{codigo}` y `POST /verificar`: la misma consulta por API (sin llave), por si su sistema quiere validar documentos recibidos.
+
+El código incluye una firma de 60 bits: **sin el código correcto no se obtiene ningún dato**. Solo se muestran datos públicos mínimos (emisor, tipo, número, fecha, total y estado según SUNAT), nunca datos del comprador. Los documentos de **prueba** se marcan como tales y nunca figuran como válidos. Cada empresa puede **desactivar** la verificación pública desde su portal. La validez tributaria la confirma SUNAT: esta consulta informa lo que SUNAT respondió al emitir.
 MD;
 
 $spec = array(
@@ -488,7 +558,7 @@ $spec = array(
     'info' => array('title' => 'API SUNAT - Facturación electrónica', 'version' => '1.0.0', 'description' => $descripcion),
     'servers' => array(array('url' => 'https://tu-dominio.com/API_SUNAT/v1', 'description' => 'Producción (reemplace por su dominio)'), array('url' => 'http://localhost/API_SUNAT/v1', 'description' => 'Local')),
     'tags' => array(array('name' => 'Sistema'), array('name' => 'Comprobantes'), array('name' => 'Resúmenes y bajas'), array('name' => 'Retenciones'), array('name' => 'Guías de remisión'),
-        array('name' => 'Consultas'), array('name' => 'Series y numeración'), array('name' => 'Webhooks'), array('name' => 'Historial'), array('name' => 'Certificado')),
+        array('name' => 'Consultas'), array('name' => 'Series y numeración'), array('name' => 'Webhooks'), array('name' => 'Historial'), array('name' => 'Certificado'), array('name' => 'Verificación')),
     'paths' => $paths,
     'components' => array('securitySchemes' => array('bearerAuth' => array('type' => 'http', 'scheme' => 'bearer', 'bearerFormat' => 'sk_test_… / sk_live_…', 'description' => 'API key. `sk_test_` = pruebas (SUNAT beta), `sk_live_` = producción.')),
         'parameters' => $params, 'schemas' => $s, 'responses' => $resp),

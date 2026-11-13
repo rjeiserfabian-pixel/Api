@@ -9,3 +9,12 @@ td input[type=password] { max-width: 150px; padding: 5px 8px; }
 td input[type=text] { padding: 5px 8px; }
 input[type=checkbox] { width: 18px; height: 18px; }
 a.badge { text-decoration: none; }
+
+/* formularios de planes y de cobros */
+.form-plan { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 4px 16px; }
+.form-plan label { margin: 8px 0 4px; }
+.form-plan input[type=text], .form-plan input[type=password], .form-plan select { max-width: none; }
+.form-plan-cab { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 4px; }
+.form-plan-pie { display: flex; flex-wrap: wrap; gap: 8px 22px; align-items: center; margin-top: 14px; }
+.form-plan-pie label.check { display: inline-flex; align-items: center; gap: 6px; }
+textarea { width: 100%; max-width: 640px; padding: 9px 11px; border: 1px solid var(--linea); border-radius: 8px; background: var(--bg); color: var(--texto); font: inherit; }

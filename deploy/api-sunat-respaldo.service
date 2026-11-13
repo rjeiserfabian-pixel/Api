@@ -1,0 +1,20 @@
+# Respaldo diario (servicio + temporizador systemd).
+#   sudo cp deploy/api-sunat-respaldo.service deploy/api-sunat-respaldo.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now api-sunat-respaldo.timer
+#   systemctl list-timers | grep respaldo      # proxima ejecucion
+#
+# Antes: defina RESPALDO_DIR y la frase de cifrado. La frase NO se escribe aqui: guardela en /etc/api-sunat-respaldo.env
+#   (permisos 600, dueno root):   RESPALDO_CLAVE=una-frase-larga-y-unica
+# y GUARDE ESA FRASE tambien en su gestor de contrasenas: sin ella el .env respaldado (con APP_KEY) no se puede abrir.
+# Despues copie la carpeta de respaldos FUERA del servidor (ver docs/DESPLIEGUE.md: rclone / rsync).
+
+[Unit]
+Description=API SUNAT - respaldo diario
+
+[Service]
+Type=oneshot
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/api-sunat
+EnvironmentFile=/etc/api-sunat-respaldo.env
+ExecStart=/bin/sh -c '/usr/bin/php /var/www/api-sunat/bin/respaldo.php crear --clave="$RESPALDO_CLAVE" --retener=14'

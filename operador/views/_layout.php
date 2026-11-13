@@ -16,9 +16,9 @@
     <nav>
       <?php
       $items = array('resumen' => array('/', 'Resumen'), 'empresas' => array('/empresas', 'Empresas'), 'solicitudes' => array('/solicitudes', 'Solicitudes de plan'),
-          'planes' => array('/planes', 'Planes'), 'usuarios' => array('/usuarios', 'Usuarios'), 'actividad' => array('/actividad', 'Actividad'), 'cuenta' => array('/cuenta', 'Mi cuenta'));
+          'cobros' => array('/cobros', 'Cobros'), 'contactos' => array('/contactos', 'Contactos del sitio'), 'planes' => array('/planes', 'Planes'), 'ajustes' => array('/ajustes', 'Ajustes'), 'usuarios' => array('/usuarios', 'Usuarios'), 'actividad' => array('/actividad', 'Actividad'), 'cuenta' => array('/cuenta', 'Mi cuenta'));
       foreach ($items as $clave => $it): ?>
-        <a href="<?= h(Vista::url($it[0])) ?>" class="<?= (isset($seccion) && $seccion === $clave) ? 'activo' : '' ?>"><?= h($it[1]) ?><?= ($clave === 'solicitudes' && $nSolicitudes > 0) ? ' <span class="badge espera">' . (int) $nSolicitudes . '</span>' : '' ?></a>
+        <a href="<?= h(Vista::url($it[0])) ?>" class="<?= (isset($seccion) && $seccion === $clave) ? 'activo' : '' ?>"><?= h($it[1]) ?><?= ($clave === 'solicitudes' && $nSolicitudes > 0) ? ' <span class="badge espera">' . (int) $nSolicitudes . '</span>' : '' ?><?= ($clave === 'cobros' && $nCobros > 0) ? ' <span class="badge espera">' . (int) $nCobros . '</span>' : '' ?><?= ($clave === 'contactos' && $nContactos > 0) ? ' <span class="badge espera">' . (int) $nContactos . '</span>' : '' ?></a>
       <?php endforeach; ?>
     </nav>
   </aside>
@@ -51,5 +51,6 @@
 </div>
 <?php endif; ?>
 <script src="<?= h(dirname(Vista::$base) . '/portal/assets/portal.js') ?>" defer></script>
+<script src="<?= h(Vista::url('/assets/operador.js')) ?>" defer></script>
 </body>
 </html>

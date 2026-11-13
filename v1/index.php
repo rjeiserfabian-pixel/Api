@@ -56,12 +56,47 @@ if ($ruta === '/health') {
     Respuesta::ok(array('servicio' => 'api-sunat', 'version' => 'v1', 'hora' => date('c'), 'worker' => $worker));
 }
 
-$permitidos = array(
-    '/me' => 'GET', '/uso' => 'GET', '/comprobantes' => 'POST', '/resumenes' => 'POST', '/bajas' => 'POST',
+// ---- Verificacion publica de documentos (SIN API key): cualquiera con el enlace/codigo, o con los datos del documento, puede consultarlo ----
+if (preg_match('#^/verificar(?:/([A-Za-z0-9\-]{20,60}))?(/qr)?$#', $ruta, $mv) && (isset($mv[1]) || !isset($mv[2]))) {
+    Db::asegurarEsquema();
+    header('Access-Control-Allow-Origin: *'); // datos publicos y de solo lectura: se pueden consultar desde un navegador
+    $ipv = isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '0.0.0.0';
+    $slug = isset($mv[1]) && $mv[1] !== '' ? $mv[1] : null;
+    $esperadoV = $slug === null ? 'POST' : 'GET';
+    if ($metodo !== $esperadoV) {
+        Respuesta::error(405, 'metodo_no_permitido', "Use $esperadoV en /v1$ruta", null, array('Allow' => $esperadoV));
+    }
+    if (!Verificacion::dentroDelLimite($ipv, 'api', 60)) {
+        Respuesta::error(429, 'limite_de_peticiones', 'Demasiadas consultas desde su direccion. Intente de nuevo en unos minutos.', null, array('Retry-After' => '600'));
+    }
+    if ($slug !== null) {
+        $fv = Verificacion::porEnlace($slug);
+    } else {
+        $b = Documentos::cuerpo();
+        $tot = Verificacion::aCentimos(isset($b['total']) ? $b['total'] : null);
+        $fv = ($tot === null) ? null : Verificacion::porDatos(isset($b['ruc']) ? (string) $b['ruc'] : '', isset($b['tipo']) ? (string) $b['tipo'] : '', isset($b['serie']) ? (string) $b['serie'] : '',
+            isset($b['numero']) ? (string) $b['numero'] : '', isset($b['fecha_emision']) ? (string) $b['fecha_emision'] : '', $tot);
+    }
+    $pv = $fv ? Verificacion::publico($fv) : null;
+    if (!$pv) { // mismo mensaje para "no existe", "codigo incorrecto", "datos que no coinciden" y "la empresa no habilita la verificacion"
+        Respuesta::error(404, 'no_encontrado', 'No se encontro un documento con esos datos. Revise el enlace o que RUC, tipo, serie, numero, fecha y total sean exactos.');
+    }
+    if (isset($mv[2])) { // imagen QR del enlace de verificacion
+        header('Content-Type: image/png');
+        header('Cache-Control: public, max-age=86400');
+        header('X-Content-Type-Options: nosniff');
+        echo Verificacion::qrPng($pv['verificacion']['url']);
+        exit;
+    }
+    Respuesta::ok($pv);
+}
+
+$permitidos = array(    '/me' => 'GET', '/uso' => 'GET', '/comprobantes' => 'POST', '/resumenes' => 'POST', '/bajas' => 'POST',
     '/reversiones' => 'POST', '/retenciones' => 'POST', '/guias' => 'POST', '/tickets' => 'POST', '/documentos' => 'GET', '/certificado' => 'GET|POST',
     '/series' => 'GET|POST', '/series/reservar' => 'POST', '/webhooks' => 'GET|POST',
 );
 $esDetalle = preg_match('#^/documentos/(doc_[a-f0-9]{20})$#', $ruta, $m);
+$esPdf = preg_match('#^/documentos/(doc_[a-f0-9]{20})/pdf$#', $ruta, $mpdf);
 $esBusqueda = preg_match('#^/comprobantes/(01|03|07|08|20|09)/([A-Za-z0-9]{4})/(\d{1,8})$#', $ruta, $mb);
 $rutasWebhook = array(
     array('#^/webhooks/(wh_[a-f0-9]{20})$#', 'DELETE', 'eliminar'),
@@ -77,10 +112,10 @@ foreach ($rutasWebhook as $rw) {
         break;
     }
 }
-if (!$esDetalle && !$esBusqueda && !$esWebhook && !isset($permitidos[$ruta])) {
+if (!$esDetalle && !$esPdf && !$esBusqueda && !$esWebhook && !isset($permitidos[$ruta])) {
     Respuesta::error(404, 'ruta_no_encontrada', "No existe $metodo /v1$ruta");
 }
-$esperado = $esWebhook ? $esWebhook[1] : (($esDetalle || $esBusqueda) ? 'GET' : $permitidos[$ruta]);
+$esperado = $esWebhook ? $esWebhook[1] : (($esDetalle || $esBusqueda || $esPdf) ? 'GET' : $permitidos[$ruta]);
 if (!in_array($metodo, explode('|', $esperado), true)) {
     $lista = str_replace('|', ', ', $esperado);
     Respuesta::error(405, 'metodo_no_permitido', "Use $lista en /v1$ruta", null, array('Allow' => $lista));
@@ -93,6 +128,19 @@ Db::asegurarEsquema(); // tras actualizar el codigo, crea lo que falte (tablas o
 // Limite de velocidad del plan: "sunat" (emitir y consultar tickets; caras) o "general" (todo lo demas)
 $esEmision = $metodo === 'POST' && in_array($ruta, array('/comprobantes', '/resumenes', '/bajas', '/reversiones', '/retenciones', '/guias', '/tickets'), true);
 Planes::limitar($ctx, $esEmision ? 'sunat' : 'general');
+
+if ($esPdf) { // PDF de un documento (A4 o ticket), generado a pedido desde el XML firmado
+    $r = Documentos::pdf($ctx, $mpdf[1], isset($_GET['formato']) && is_string($_GET['formato']) ? $_GET['formato'] : null);
+    http_response_code(200);
+    header('Content-Type: application/pdf');
+    header('Content-Disposition: inline; filename="' . $r['nombre'] . '"');
+    header('Cache-Control: private, no-store');
+    header('X-Content-Type-Options: nosniff');
+    header('X-Request-Id: ' . Respuesta::id());
+    header('Content-Length: ' . strlen($r['pdf']));
+    echo $r['pdf'];
+    exit;
+}
 
 if ($ruta === '/me') {
     Respuesta::ok(array(

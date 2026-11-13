@@ -23,6 +23,8 @@
  *   php bin/admin.php usuario:crear --ruc=20123456789 --email=cliente@empresa.com --nombre="Nombre" [--rol=admin|lector]   # acceso al portal; muestra una clave TEMPORAL
  *   php bin/admin.php usuario:listar [--ruc=...] | usuario:reset --email=... | usuario:desactivar --email=... | usuario:activar --email=...
  *   php bin/admin.php operador:crear --email=usted@correo.com --nombre="Su nombre"   # cuenta para el panel /operador/ (clave TEMPORAL); operador:listar | operador:reset --email=...
+ *   php bin/admin.php verificacion:reindexar            # guarda fecha y total de documentos antiguos (para la consulta publica con datos)
+ *   php bin/admin.php verificacion:enlace --ruc=... --tipo=01 --serie=F001 --numero=150 [--entorno=test]   # enlace/QR de verificacion de un documento
  *   php bin/admin.php db:copiar --dsn="pgsql:host=127.0.0.1;port=5432;dbname=api_sunat" --user=... --pass=...
  *        Copia TODOS los datos de la base actual (la de DB_DSN o SQLite) a otra base VACIA (ej. PostgreSQL).
  *        No modifica el origen. Despues, cambie DB_DSN/DB_USER/DB_PASS en .env para usar la nueva base.
@@ -38,6 +40,7 @@ foreach (array('Respuesta', 'Db', 'Crypto', 'Auth', 'Series', 'Planes') as $c) {
 }
 require_once $raiz . '/portal/src/Usuarios.php';
 require_once $raiz . '/operador/src/Operadores.php';
+require_once $raiz . '/v1/src/Verificacion.php';
 date_default_timezone_set('America/Lima');
 
 function salir($msg, $codigo = 1)
@@ -228,7 +231,7 @@ switch ($cmd) {
 
     case 'db:copiar':
         exigir($o, array('dsn'));
-        $tablas = array('planes', 'empresas', 'api_keys', 'certificados', 'series', 'documentos', 'uso', 'webhooks', 'eventos', 'entregas', 'usuarios_portal', 'auditoria', 'operadores', 'solicitudes_plan'); // (limites es transitoria: no se copia)
+        $tablas = array('planes', 'empresas', 'api_keys', 'certificados', 'series', 'documentos', 'uso', 'webhooks', 'eventos', 'entregas', 'usuarios_portal', 'auditoria', 'operadores', 'solicitudes_plan', 'contactos', 'ajustes', 'suscripciones', 'pagos', 'pdf_config'); // (limites es transitoria: no se copia)
         $origen = Db::pdo();
         $motorOrigen = $origen->getAttribute(PDO::ATTR_DRIVER_NAME);
         Db::asegurarEsquema();
@@ -467,6 +470,28 @@ switch ($cmd) {
             . "  Contrasena TEMPORAL (una sola vez):" . PHP_EOL . PHP_EOL . "  {$clave}" . PHP_EOL . PHP_EOL;
         break;
 
+    case 'verificacion:reindexar':
+        // Guarda fecha y total (leidos del XML firmado) de los documentos emitidos ANTES de existir la verificacion publica,
+        // para que tambien se puedan consultar con los datos del documento. Los enlaces/QR funcionan sin esto.
+        Db::asegurarEsquema();
+        $falta = Db::consultar("SELECT uid FROM documentos WHERE (fecha_emision IS NULL OR total IS NULL) AND ruta_xml IS NOT NULL AND estado IN ('aceptado','rechazado','pendiente') ORDER BY id");
+        foreach ($falta as $d) {
+            Verificacion::capturar($d['uid']);
+        }
+        $quedan = Db::uno("SELECT COUNT(*) AS n FROM documentos WHERE (fecha_emision IS NULL OR total IS NULL) AND ruta_xml IS NOT NULL AND estado IN ('aceptado','rechazado','pendiente')");
+        echo 'Revisados ' . count($falta) . ' documentos. Sin datos recuperables (XML no disponible): ' . $quedan['n'] . PHP_EOL;
+        break;
+
+    case 'verificacion:enlace':
+        exigir($o, array('ruc', 'tipo', 'serie', 'numero'));
+        $ent = isset($o['entorno']) && $o['entorno'] === 'test' ? 'test' : 'live';
+        if (!ctype_digit($o['numero'])) {
+            salir('El numero debe tener solo digitos.');
+        }
+        $slug = Verificacion::slug($o['ruc'], $o['tipo'], $o['serie'], (int) $o['numero'], $ent);
+        echo 'Enlace de verificacion (' . ($ent === 'live' ? 'produccion' : 'pruebas') . '):' . PHP_EOL . '  ' . Verificacion::url($slug) . PHP_EOL . 'Imagen QR:' . PHP_EOL . '  ' . Verificacion::urlQr($slug) . PHP_EOL;
+        break;
+
     case 'serie:crear':
         exigir($o, array('ruc', 'entorno', 'tipo', 'serie'));
         if (!in_array($o['entorno'], array('test', 'live'), true)) {
@@ -515,6 +540,6 @@ switch ($cmd) {
         break;
 
     default:
-        echo "Comandos: init | empresa:crear | empresa:actualizar | empresa:listar | key:crear | key:listar | key:revocar | cert:subir | cert:ver | serie:crear | serie:listar | db:copiar | plan:sembrar | plan:crear | plan:listar | empresa:plan | uso:ver | operador:crear | operador:listar | operador:reset | usuario:crear | usuario:listar | usuario:reset | usuario:activar | usuario:desactivar" . PHP_EOL
+        echo "Comandos: init | empresa:crear | empresa:actualizar | empresa:listar | key:crear | key:listar | key:revocar | cert:subir | cert:ver | serie:crear | serie:listar | db:copiar | plan:sembrar | plan:crear | plan:listar | empresa:plan | uso:ver | verificacion:reindexar | verificacion:enlace | operador:crear | operador:listar | operador:reset | usuario:crear | usuario:listar | usuario:reset | usuario:activar | usuario:desactivar" . PHP_EOL
             . "Vea el encabezado de bin/admin.php para las opciones." . PHP_EOL;
 }

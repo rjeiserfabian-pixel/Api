@@ -128,7 +128,7 @@ class Usuarios
             $empresaActiva = $e && (int) $e['activo'] === 1;
         }
         if (!$u || !$ok || $bloqueada || (int) $u['activo'] !== 1 || !$empresaActiva) {
-            Planes::incrementar($claveIp, $ventana);
+            Planes::incrementar($claveIp, ((int) $ventana + 1) * 15); // "ventana" en minutos: el fin de la ventana de 15 min (si no, Planes::limpiar() lo borraria al instante)
             if ($u) {
                 $n = (int) $u['intentos_fallidos'] + 1;
                 if ($n >= self::FALLOS_PARA_BLOQUEO) {

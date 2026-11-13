@@ -45,10 +45,11 @@ class Planes
             $p = Db::uno('SELECT * FROM planes WHERE id = ? AND activo = 1', array($empresa['plan_id']));
             if ($p) {
                 return array('id' => (int) $p['id'], 'nombre' => $p['nombre'], 'cuota_mensual' => self::entero($p['cuota_mensual']), 'limite_sunat_min' => self::entero($p['limite_sunat_min']),
-                    'limite_general_min' => self::entero($p['limite_general_min']), 'max_webhooks' => (int) $p['max_webhooks']);
+                    'limite_general_min' => self::entero($p['limite_general_min']), 'max_webhooks' => (int) $p['max_webhooks'],
+                    'incluye_pdf' => isset($p['incluye_pdf']) ? (int) $p['incluye_pdf'] : 1);
             }
         }
-        return array('id' => null, 'nombre' => 'sin_plan', 'cuota_mensual' => null, 'limite_sunat_min' => null, 'limite_general_min' => null, 'max_webhooks' => 5);
+        return array('id' => null, 'nombre' => 'sin_plan', 'cuota_mensual' => null, 'limite_sunat_min' => null, 'limite_general_min' => null, 'max_webhooks' => 5, 'incluye_pdf' => 1);
     }
 
     public static function periodo()

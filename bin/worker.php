@@ -11,7 +11,8 @@
  *   2) REINTENTA los envios que fallaron por un problema transitorio (SUNAT/motor caido): solo los que llegaron con
  *      Idempotency-Key, con espera creciente (1 min, 5 min, 15 min, 1 h, 3 h, 6 h, 12 h);
  *   3) consulta los tickets de guias pendientes;
- *   4) envia los avisos (webhooks) pendientes, con reintentos (1 min ... 24 h).
+ *   4) envia los avisos (webhooks) pendientes, con reintentos (1 min ... 24 h);
+ *   5) procesa los vencimientos de suscripciones (prueba terminada, gracia, paso al plan de destino).
  *
  * Es seguro ejecutar mas de un worker a la vez: cada documento/aviso se "toma" de forma atomica.
  * Para detenerlo con calma cree el archivo storage/worker.stop (se borra solo al detenerse).
@@ -26,6 +27,9 @@ $raiz = dirname(__DIR__);
 require_once $raiz . '/libraries/env.php';
 foreach (array('Respuesta', 'Db', 'Crypto', 'Auth', 'Certificados', 'Validador', 'Motor', 'Series', 'Planes', 'Documentos', 'Webhooks') as $c) {
     require_once $raiz . '/v1/src/' . $c . '.php';
+}
+foreach (array('Usuarios', 'Suscripciones', 'Cobros') as $c) {
+    require_once $raiz . '/portal/src/' . $c . '.php';
 }
 date_default_timezone_set('America/Lima');
 error_reporting(E_ALL);
@@ -126,6 +130,9 @@ do {
     });
     paso('avisos (webhooks) enviados', function () {
         return Webhooks::procesarEntregas(20);
+    });
+    paso('suscripciones vencidas procesadas', function () {
+        return Cobros::procesarVencimientos();
     });
     paso('contadores de limite antiguos borrados', function () {
         return Planes::limpiar();

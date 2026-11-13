@@ -68,7 +68,7 @@ class Operadores
         $ok = password_verify((string) $clave, $o ? $o['clave_hash'] : self::HASH_RELLENO);
         $bloqueada = $o && $o['bloqueado_hasta'] && strtotime($o['bloqueado_hasta']) > time();
         if (!$o || !$ok || $bloqueada || (int) $o['activo'] !== 1) {
-            Planes::incrementar($claveIp, $ventana);
+            Planes::incrementar($claveIp, ((int) $ventana + 1) * 15); // fin de la ventana, en minutos (ver Usuarios::autenticar)
             if ($o) {
                 $n = (int) $o['intentos_fallidos'] + 1;
                 if ($n >= Usuarios::FALLOS_PARA_BLOQUEO) {

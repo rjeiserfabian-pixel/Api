@@ -551,8 +551,11 @@ $flood = new Cli();
 for ($i = 0; $i < 21; $i++) {
     $flood->login('inexistente' . $i . '@lab.test', 'Alguna-Clave-123');
 }
+require_once 'v1/src/Planes.php';
+Planes::limpiar(); // lo que hace el worker cada ciclo: NO debe borrar los contadores de login vigentes
 $r = (new Cli())->login('adminb@lab.test', $NUEVA);
 chk('tras 20 fallos desde una misma IP, ni un usuario legitimo entra desde ella (se frena el ataque)', $r['http'] === 401);
+chk('...y el limite sobrevive a la limpieza que hace el worker (Planes::limpiar)', (int) Db::uno("SELECT COUNT(*) AS n FROM limites WHERE clave LIKE 'login:ip:%'")['n'] >= 1);
 Db::ejecutar("DELETE FROM limites WHERE clave LIKE 'login:%'");
 Db::ejecutar('UPDATE usuarios_portal SET intentos_fallidos = 0, bloqueado_hasta = NULL');
 $r = (new Cli())->login('adminb@lab.test', $NUEVA);

@@ -1,4 +1,7 @@
 <h1>Resumen</h1>
+<?php if (!empty($aviso)): ?>
+  <div class="aviso <?= $aviso['tipo'] === 'alerta' ? 'error' : 'info' ?>"><?= h($aviso['texto']) ?> <a href="<?= h(Vista::url('/plan')) ?>">Ver mi plan</a></div>
+<?php endif; ?>
 <?php
 $cuota = $uso['plan']['cuota_mensual'];
 $pct = ($cuota !== null && $cuota > 0) ? min(100, (int) round(100 * $uso['documentos_usados'] / $cuota)) : 0;

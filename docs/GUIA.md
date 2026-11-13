@@ -242,7 +242,7 @@ Se valida que sea RSA, que la llave corresponda al certificado, que esté vigent
 
 ## 10. Portal de clientes
 
-Direccion: `/portal/`. Cada cliente entra con su correo y contrasena y ve **solo su empresa**: plan y cuota del mes, estado del certificado, documentos (con detalle, XML/CDR/PDF), llaves API, webhooks y sus entregas, certificado digital, credenciales SOL/GRE y actividad.
+Direccion: `/portal/`. Cada cliente entra con su correo y contrasena y ve **solo su empresa**: plan y cuota del mes, estado del certificado, documentos (con detalle, XML, CDR y PDF), llaves API, webhooks y sus entregas, certificado digital, credenciales SOL/GRE y actividad.
 
 - **Alta de usuarios** (no hay auto-registro): `php bin/admin.php usuario:crear --ruc=… --email=… --nombre="…" --rol=admin`. Muestra una contrasena temporal **una sola vez**; el usuario debe cambiarla al primer ingreso.
 - **Olvido de contrasena**: `php bin/admin.php usuario:reset --email=…` (tambien desbloquea la cuenta).
@@ -266,7 +266,83 @@ Direccion: `/operador/` (solo para usted, el dueno del servicio; es una aplicaci
 - **Seguridad**: bloqueo de 15 min tras 5 fallos y limite por IP; sesion de 30 min de inactividad; CSRF; CSP estricta; las acciones sensibles (crear/restablecer/desactivar usuarios, desactivar empresas, quitar un plan, crear clientes) piden su contrasena otra vez; cada cambio queda en la actividad de la empresa (el cliente ve que fue el operador). Opcional: `OPERADOR_IPS_PERMITIDAS` en `.env` limita el panel a sus IP; en produccion active tambien `PORTAL_REQUIERE_HTTPS=1`.
 - **Estado del worker**: el worker escribe un latido en cada ciclo; el panel lo muestra en todas las paginas. El worker **no se enciende desde la web**: se deja programado una vez en el servidor (Windows: Programador de tareas "al iniciar el sistema"; Linux: servicio systemd). Si aparece "DETENIDO", los reintentos y los webhooks estan parados.
 - Prueba automatica: `php docs/probar_operador.php` (crea y borra empresas, operador y planes de laboratorio).
-## 12. Probar que todo funciona
+## 12. Cobros y suscripciones
+
+Todo se configura desde el panel del operador (`/operador/`); no hace falta tocar la consola.
+
+**Precios y pruebas (menú *Planes*)**: cada plan tiene *precio mensual* (en soles, ej. `99.90`), *descuento anual* (%, el cliente paga 12 meses con ese descuento) y *prueba gratis (días)*. La página pública y el portal calculan solos el precio anual y el ahorro. Un precio vacío muestra "Consultar".
+
+**Ajustes (menú *Ajustes*)**:
+- *Días de gracia* tras vencer (por defecto 5): el cliente conserva su plan y ve una alerta roja. La prueba gratis no tiene gracia.
+- *Avisar antes de vencer* (por defecto 7 días).
+- *Plan al que pasa al vencer del todo*: recomendado su plan gratuito (por ejemplo "Prueba"). Si no elige ninguno, el cliente vencido conserva su plan y solo se marca vencida (nunca queda sin límites).
+- *Instrucciones de pago*: texto que ven los clientes en su portal (cuenta bancaria, Yape, a dónde enviar el voucher).
+
+**Ciclo de vida de una suscripción**
+
+| Estado | Qué significa |
+|---|---|
+| `prueba` | Prueba gratis en curso (una sola por empresa; el operador puede repetirla). Al terminar pasa a `vencida`. |
+| `activa` | Pagada y vigente. |
+| `gracia` | Venció pero está dentro de los días de gracia: conserva su plan. |
+| `vencida` | Terminó la gracia (o la prueba): baja al plan de destino. |
+
+- **Registrar un pago** (ficha de la empresa → *Registrar un pago*): elija plan y período (mensual = 1 mes, anual = 12), el monto se propone según los precios, indique método y n.º de operación. Renovar a tiempo suma desde el vencimiento anterior (nadie pierde ni gana días); si cambia de plan o ya venció, cuenta desde hoy. Con la misma referencia el pago **no se duplica**. Si había una solicitud pendiente de ese plan, se aprueba sola.
+- **Quién vence**: solo las empresas con suscripción. Las que tienen un plan asignado a mano (convenios, clientes propios) **no vencen nunca**.
+- **Quién procesa los vencimientos**: el worker, en cada ciclo; además el panel los actualiza al abrir *Resumen* o *Cobros*. Mantenga el worker encendido.
+- **Para el cliente** (portal → *Mi plan*): ve su estado y fecha de vencimiento, precios mensual/anual con el ahorro, las instrucciones de pago, puede iniciar su prueba gratis (una vez) y pedir un plan eligiendo mensual o anual. Recibe avisos en su Resumen cuando está por vencer, en gracia o vencida.
+- **Vistas del operador**: *Cobros* (suscripciones por estado, por vencer, en gracia, vencidas), *Pagos* (historial y total cobrado del mes) y la ficha de cada empresa.
+
+**Pasarela de pago (cuando tenga su cuenta)**: ya está preparado el punto de entrada. El webhook de la pasarela, una vez verificada su firma, solo debe llamar a `Cobros::registrarPago($empresaId, $planId, 'mensual'|'anual', $montoEnCentimos, 'pasarela:<nombre>', $idDelPagoEnLaPasarela, '', 'pasarela')`. Es idempotente por (método, referencia): un aviso repetido no suma dos veces. Falta construir (y se hará con la cuenta de pruebas de la pasarela): el botón "Pagar" del portal, el webhook receptor y, si se desea, el cobro recurrente con tarjeta guardada y la emisión automática de su propia factura por cada pago.
+## 13. Sitio público (página promocional)
+
+Dirección: `/web/` (en producción apunte la raíz de su dominio a la carpeta `web/`, o publíquela en el dominio principal; la API, el portal y la documentación pueden seguir en su propio subdominio: use `SITIO_URL_APP` en `.env`).
+
+- **Qué muestra**: propuesta de valor, ejemplo real de petición/respuesta, características, cómo funciona, documentos soportados, sección para desarrolladores (webhooks), seguridad, **planes**, preguntas frecuentes y un **formulario de contacto**. Se ve bien en celular y respeta el modo oscuro del dispositivo.
+- **Los planes salen de la base de datos**: en el panel del operador, *Planes*, cada plan tiene un **precio mensual**, **descuento anual** y **días de prueba gratis** (sección 12); la página muestra "S/ 99.00 al mes, o S/ 986.04 al año · ahorra …" y la insignia de prueba. Sin precio mensual usa el "texto de precio" o "Consultar" y la casilla **En el sitio** (los que no se marquen, o estén inactivos, no aparecen). El plan llamado "Pro" se resalta como "Más elegido". Cambiar un plan en el panel cambia la página al instante.
+- **Contactos**: lo que se envía por el formulario llega al panel del operador, *Contactos del sitio* (con un contador de pendientes en el menú y en el resumen). Responda al correo indicado y márquelo como atendido. **No se envían correos automáticos**: revise la bandeja de vez en cuando.
+- **Protección del formulario**: casilla trampa y tiempo mínimo para detectar robots, límite de 5 solicitudes por hora por IP (300 al día en total), validación de todos los campos, textos recortados y escapados, y verificación de origen. Los robots reciben un "gracias" falso pero no se guarda nada.
+- **Marca**: `SITIO_NOMBRE` en `.env` cambia el nombre que se muestra (por defecto "API SUNAT"). Pie de página incluye el aviso de que no está afiliado a SUNAT.
+- **Antes de publicar**: agregue sus páginas legales (política de privacidad y términos de uso) y enlácelas en el pie; el formulario recoge datos personales y debe informarse su tratamiento. El logo es provisional (un símbolo simple): cámbielo por el suyo en `web/views/inicio.php`.
+- Prueba automática: `php docs/probar_sitio.php`.
+## 14. Verificación pública de documentos
+
+Cada factura, boleta, nota, retención y guía trae un **enlace de verificación** y un **código QR** para que cualquiera pueda comprobar que fue emitido por el servicio y ver el estado que informó SUNAT.
+
+- **Página pública**: `<sitio>/verificar`. Se puede consultar de dos formas: (1) **por el enlace o el QR** del documento (`/verificar/20123456789-01-F001-150-K7M2Q9XA4BHD`), o (2) **con los datos**: RUC del emisor, tipo, serie, número, fecha de emisión y total (**todos deben coincidir**).
+- **Seguridad**: el enlace lleva un código de 12 caracteres firmado con `APP_KEY` (60 bits): sin él no se obtiene ningún dato, así que no se pueden recorrer números de factura ajenos. Las consultas están limitadas por IP (60 por 10 minutos por enlace/API; 20 por 10 minutos con datos). Codigo incorrecto, documento inexistente, datos que no coinciden y empresa que no lo habilita dan **exactamente la misma respuesta**.
+- **Qué se muestra**: emisor (razón social y RUC), tipo, serie-número, fecha, total, respuesta de SUNAT y huella de la firma. **Nunca** datos del comprador. Los documentos de **prueba** se marcan como tales y nunca figuran como válidos; los rechazados se muestran como **no válidos**.
+- **Para los integradores (la API)**: la respuesta de cada emisión y `GET /documentos/{id}` traen `verificacion: { codigo, url, qr }`. `qr` es una imagen PNG que pueden **imprimir en sus propios comprobantes** junto al QR estándar de SUNAT. Además hay consulta por API **sin llave**: `GET /v1/verificar/{codigo}`, `GET /v1/verificar/{codigo}/qr` y `POST /v1/verificar` (ver la referencia OpenAPI).
+- **Cada empresa decide** (portal → *Mi cuenta* → *Verificación pública*): puede desactivarla y los enlaces dejan de mostrar información. Por defecto está activada.
+- **Configuración**: `SITIO_URL` en `.env` es la dirección pública de la página (por defecto se deduce). **`APP_KEY` no debe cambiar** una vez impresos documentos: los códigos dejarían de verificar.
+- **Documentos antiguos**: los emitidos antes de esta función se pueden verificar por enlace; para que también se puedan consultar **con datos** ejecute una vez `php bin/admin.php verificacion:reindexar` (lee fecha y total de sus XML firmados). `php bin/admin.php verificacion:enlace --ruc=… --tipo=01 --serie=F001 --numero=150` imprime el enlace de un documento.
+- **PDF**: la API genera el PDF a pedido (sección 15) y ya imprime en él el QR de SUNAT y este enlace de verificación. Los sistemas que imprimen sus propios PDF pueden poner el QR de verificación (imagen PNG) junto al de SUNAT.
+- Prueba automática: `php docs/probar_verificacion.php [--key=sk_test_…]` (con la llave hace además una emisión real contra el beta de SUNAT).
+
+## 15. PDF propio de la API (opcional)
+
+La API puede generar la **representación impresa en PDF** de sus facturas, boletas y notas de crédito/débito, en **A4** o **ticket de 80 mm**. Es **opcional**: si su sistema ya imprime sus propios PDF, no necesita nada de esto.
+
+- **A pedido, desde el XML firmado**: no se guarda ningún PDF. `GET /v1/documentos/{id}/pdf?formato=a4|ticket` lo genera al momento (sirve para documentos de cualquier fecha). También: `POST /comprobantes?incluir=pdf` devuelve el PDF en `archivos.pdf_base_64` junto con la emisión (si falla, el documento ya emitido no se afecta). Sin `?formato`, se usa el que la empresa eligió.
+- **Qué incluye**: logo, razón social y datos del emisor, recuadro con RUC y número, datos del cliente (con su dirección si la envió al emitir), tabla de ítems (varias páginas, con encabezado repetido), descuentos, operaciones gravadas/exoneradas/inafectas/gratuitas, IGV, ICBPER, monto en letras, cuotas del crédito, leyendas (detracción), observaciones, **código QR estándar de SUNAT**, huella de la firma y, si la empresa lo permite, el **enlace y QR de verificación**.
+- **Solo documentos aceptados** de tipo 01, 03, 07 y 08 (`409 documento_no_aceptado` / `422 pdf_no_disponible` en los demás).
+- **Cada empresa lo personaliza** en el portal (*Comprobantes PDF*): **logo** (PNG o JPG hasta 1 MB; se valida y se re-codifica a un PNG limpio, guardado en `storage/logos`, fuera de la web), **color**, **formato por defecto**, **línea de contacto** y **pie de página**, con **vista previa** (comprobante de ejemplo). Los cambios aplican a todos sus PDF, también a los anteriores.
+- **Por plan**: el operador marca *Incluye PDF* en cada plan (menú *Planes*). Sin esa casilla, el pedido responde `403 pdf_no_incluido`. Las empresas sin plan (convenios) siempre pueden. Conviene incluirlo en los planes de pago como valor agregado.
+- **Datos extra**: al emitir se guardan, solo para imprimir, la `cliente.cliente_direccion` y la `venta.nota` (el XML no las trae). El resto del cuerpo no se guarda.
+- **Respaldos**: los logos (`storage/logos`) entran al respaldo (`logos.zip`) y se restauran con él.
+- Prueba automática: `php docs/probar_pdf.php [--key=sk_test_…]`.
+## 16. Puesta en producción y respaldos
+
+La guía completa, paso a paso, está en **`docs/DESPLIEGUE.md`** (servidor, HTTPS, Apache, PostgreSQL, worker como servicio, respaldos, verificación y restauración). Herramientas del proyecto:
+
+```bash
+php bin/verificar.php --produccion            # revisa la instalacion: configuracion, seguridad por red, worker, respaldos, certificados
+php bin/respaldo.php crear --clave="FRASE" --retener=14   # base de datos + .env (cifrado) + comprobantes, con huellas SHA-256
+php bin/respaldo.php listar | verificar | restaurar --desde=… --destino=…
+```
+
+Archivos de ejemplo en `deploy/`: Apache, Nginx (referencia), servicio del worker, respaldo diario (systemd), tareas de Windows y `.env` de producción.
+## 17. Probar que todo funciona
 
 ```bash
 # Prueba real: ejecuta los ejemplos contra la API y verifica los resultados (usa SUNAT beta)
@@ -280,13 +356,23 @@ php docs/probar_reintentos.php --key=sk_test_XXXXXXXX
 
 # Prueba de límites, tope global y cuota mensual: crea una empresa de laboratorio (se borra sola) y usa un motor falso
 php docs/probar_limites.php
+
+# Pruebas de seguridad y funcionamiento del portal, el panel del operador, el sitio público y los cobros (crean datos
+# de laboratorio con RUC 200000000xx y los borran al terminar; requieren Apache encendido)
+php docs/probar_portal.php
+php docs/probar_operador.php
+php docs/probar_sitio.php
+php docs/probar_cobros.php
+php docs/probar_verificacion.php --key=sk_test_XXXX   # con la llave tambien emite una boleta de prueba en SUNAT beta
+php docs/probar_pdf.php --key=sk_test_XXXX            # PDF propio de la API (lector, logo seguro, A4/ticket, API, portal; emite una boleta de prueba)
+php docs/probar_respaldo.php                         # respaldos: crear, verificar, detectar alteraciones y restaurar (no toca el sistema)
 ```
 
 Rechaza llaves `sk_live_` a propósito. Úsela **después de cada cambio**: si todo sale `[OK]`, la API sigue funcionando.
 
 También puede importar `postman/API_SUNAT_v1.postman_collection.json` en Postman (44 peticiones con tests automáticos): ponga su llave de prueba en la variable `api_key` y ejecute primero «00 Iniciar tanda de numeros».
 
-## 13. Administración (solo línea de comandos)
+## 18. Administración (solo línea de comandos)
 
 ```bash
 php bin/admin.php init                       # prepara base de datos y claves (una vez)
@@ -327,7 +413,7 @@ php docs/probar.php --key=sk_test_XXXX && php docs/probar_numeracion.php --key=s
 
 Respalde la base y `APP_KEY` juntas: los secretos guardados solo se descifran con esa llave.
 
-## 14. Regenerar la documentación
+## 19. Regenerar la documentación
 
 Los ejemplos viven en `docs/ejemplos.php` (única fuente). Si cambia algo:
 
@@ -337,7 +423,7 @@ php postman/gen_v1.php            # colección de Postman
 php docs/probar.php --key=sk_test_…   # confirma que los ejemplos siguen funcionando
 ```
 
-## 15. Limitaciones conocidas
+## 20. Limitaciones conocidas
 
 - Un número **reservado** que nunca se envía queda como hueco en la serie (todavía no hay una operación para liberarlo).
 - Los tickets de **resumen, baja y reversión** no se resuelven solos (solo los de guías): se consultan con `POST /tickets`.

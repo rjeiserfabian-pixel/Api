@@ -1,0 +1,8 @@
+# Sitio publico: toda peticion (salvo /assets/) entra por index.php.
+Options -Indexes
+DirectoryIndex index.php
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteCond %{REQUEST_URI} !/assets/
+  RewriteRule ^ index.php [L]
+</IfModule>

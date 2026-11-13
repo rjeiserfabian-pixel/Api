@@ -15,7 +15,7 @@
     <nav>
       <?php
       $items = array('resumen' => array('/', 'Resumen'), 'documentos' => array('/documentos', 'Documentos'), 'llaves' => array('/llaves', 'Llaves API'),
-          'webhooks' => array('/webhooks', 'Webhooks'), 'certificado' => array('/certificado', 'Certificado digital'), 'credenciales' => array('/credenciales', 'Credenciales SUNAT'), 'plan' => array('/plan', 'Mi plan'));
+          'webhooks' => array('/webhooks', 'Webhooks'), 'certificado' => array('/certificado', 'Certificado digital'), 'credenciales' => array('/credenciales', 'Credenciales SUNAT'), 'pdf' => array('/pdf', 'Comprobantes PDF'), 'plan' => array('/plan', 'Mi plan'));
       if ($usuario['rol'] === 'admin') {
           $items['actividad'] = array('/actividad', 'Actividad');
       }

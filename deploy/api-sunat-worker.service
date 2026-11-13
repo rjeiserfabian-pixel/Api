@@ -1,0 +1,30 @@
+# Servicio systemd del worker (reintentos, webhooks, tickets de guias y vencimientos de suscripciones).
+# Instalacion:
+#   sudo cp deploy/api-sunat-worker.service /etc/systemd/system/
+#   (edite User, WorkingDirectory y la ruta de php si hace falta)
+#   sudo systemctl daemon-reload && sudo systemctl enable --now api-sunat-worker
+#   systemctl status api-sunat-worker        # debe decir "active (running)"
+#   journalctl -u api-sunat-worker -f        # ver lo que hace en vivo (tambien en logs/worker.log)
+# Para detenerlo con calma:  touch /var/www/api-sunat/storage/worker.stop
+
+[Unit]
+Description=API SUNAT - worker en segundo plano
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/api-sunat
+ExecStart=/usr/bin/php /var/www/api-sunat/bin/worker.php
+Restart=always
+RestartSec=5
+# endurecimiento basico
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/www/api-sunat/storage /var/www/api-sunat/logs /var/www/api-sunat/files
+
+[Install]
+WantedBy=multi-user.target

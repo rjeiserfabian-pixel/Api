@@ -9,7 +9,7 @@ require_once $raiz . '/libraries/env.php';
 foreach (array('Respuesta', 'Db', 'Crypto', 'Auth', 'Series', 'Planes') as $c) {
     require_once $raiz . '/v1/src/' . $c . '.php';
 }
-foreach (array('Vista', 'Sesion', 'Usuarios', 'Suscripciones') as $c) {
+foreach (array('Vista', 'Sesion', 'Usuarios', 'Suscripciones', 'Cobros') as $c) {
     require_once $raiz . '/portal/src/' . $c . '.php';
 }
 foreach (array('Operadores', 'Salud') as $c) {
@@ -94,7 +94,9 @@ function pagina($vista, array $datos = array(), $menu = true, $status = 200)
     $base = array('csrf' => Sesion::token(), 'flash' => Sesion::tomarFlash(), 'secreto' => Sesion::tomarSecreto(), 'rutaActual' => $ruta);
     if ($menu) {
         $base += array('operador' => $operador, 'worker' => Salud::worker(),
-            'nSolicitudes' => (int) Db::uno("SELECT COUNT(*) AS n FROM solicitudes_plan WHERE estado = 'pendiente'")['n']);
+            'nSolicitudes' => (int) Db::uno("SELECT COUNT(*) AS n FROM solicitudes_plan WHERE estado = 'pendiente'")['n'],
+            'nContactos' => (int) Db::uno("SELECT COUNT(*) AS n FROM contactos WHERE estado = 'nuevo'")['n'],
+            'nCobros' => (int) Db::uno("SELECT COUNT(*) AS n FROM suscripciones WHERE estado = 'gracia' OR (estado = 'activa' AND vence <= ?)", array(Cobros::sumarDias(Db::ahora(), Ajustes::dias('dias_aviso'))))['n']);
     }
     Vista::render($vista, array_merge($base, $datos), $menu);
     exit;
@@ -191,6 +193,11 @@ function empresaPorId($id)
 
 // ---------------------------------------------------------------- resumen
 if ($ruta === '/' && $metodo === 'GET') {
+    try {
+        Cobros::procesarVencimientos(); // el worker lo hace; aqui se hace tambien para que lo que se ve este al dia
+    } catch (Exception $x) {
+        error_log('[operador] vencimientos: ' . $x->getMessage());
+    }
     $periodo = Planes::periodo();
     $cerca = Db::consultar('SELECT e.id, e.ruc, e.razon_social, p.nombre AS plan, p.cuota_mensual AS cuota, u.documentos AS usados
         FROM empresas e JOIN planes p ON p.id = e.plan_id JOIN uso u ON u.empresa_id = e.id AND u.periodo = ?
@@ -296,7 +303,10 @@ if (preg_match('#^/empresas/(\d{1,9})$#', $ruta, $m) && $metodo === 'GET') {
         'certs' => $cert,
         'nLlaves' => (int) Db::uno('SELECT COUNT(*) AS n FROM api_keys WHERE empresa_id = ? AND activo = 1', array($e['id']))['n'],
         'nDocs' => (int) Db::uno('SELECT COUNT(*) AS n FROM documentos WHERE empresa_id = ?', array($e['id']))['n'],
-        'actividad' => Auditoria::recientes($e['id'], 15)));
+        'actividad' => Auditoria::recientes($e['id'], 15),
+        'sus' => Cobros::suscripcion($e['id']), 'pagos' => Db::consultar('SELECT g.*, p.nombre AS plan FROM pagos g LEFT JOIN planes p ON p.id = g.plan_id WHERE g.empresa_id = ? ORDER BY g.id DESC LIMIT 12', array($e['id'])),
+        'planesTodos' => Db::consultar('SELECT * FROM planes WHERE activo = 1 ORDER BY (precio_mensual IS NULL), precio_mensual, id'),
+        'pre' => array('plan_id' => isset($_GET['plan_id']) && ctype_digit((string) $_GET['plan_id']) ? (int) $_GET['plan_id'] : 0, 'periodo' => (isset($_GET['periodo']) && $_GET['periodo'] === 'anual') ? 'anual' : 'mensual')));
 }
 if (preg_match('#^/empresas/(\d{1,9})/plan$#', $ruta, $m) && $metodo === 'POST') {
     $e = empresaPorId($m[1]);
@@ -394,6 +404,132 @@ if ($ruta === '/usuarios/estado' && $metodo === 'POST') {
     ir($volver);
 }
 
+// ---------------------------------------------------------------- contactos (formulario del sitio publico)
+if ($ruta === '/contactos' && $metodo === 'GET') {
+    $solo = (isset($_GET['estado']) && $_GET['estado'] === 'todos') ? false : true;
+    $lista = Db::consultar('SELECT * FROM contactos' . ($solo ? " WHERE estado = 'nuevo'" : '') . ' ORDER BY id DESC LIMIT 200');
+    pagina('contactos', array('titulo' => 'Contactos', 'seccion' => 'contactos', 'contactos' => $lista, 'solo' => $solo));
+}
+if ($ruta === '/contactos/estado' && $metodo === 'POST') {
+    $nuevo = (isset($_POST['estado']) && $_POST['estado'] === 'nuevo') ? 'nuevo' : 'atendido';
+    Db::ejecutar('UPDATE contactos SET estado = ? WHERE id = ?', array($nuevo, idPost('id')));
+    ir('/contactos' . ((isset($_POST['ver']) && $_POST['ver'] === 'todos') ? '?estado=todos' : ''));
+}
+
+// ---------------------------------------------------------------- planes
+// ---------------------------------------------------------------- cobros: suscripciones, pagos, pruebas gratis y ajustes
+function metodoPago()
+{
+    $m = isset($_POST['metodo']) ? (string) $_POST['metodo'] : '';
+    return array_key_exists($m, Cobros::$metodos) ? $m : false;
+}
+if (preg_match('#^/empresas/(\d{1,9})/pago$#', $ruta, $m) && $metodo === 'POST') {
+    $e = empresaPorId($m[1]);
+    if (!$e) {
+        terminar(404, 'No encontrada', 'No existe esa empresa.');
+    }
+    confirmarOVolver('/empresas/' . $e['id']);
+    $monto = Dinero::aCentimos(isset($_POST['monto']) ? (string) $_POST['monto'] : '');
+    $met = metodoPago();
+    $periodoPago = (isset($_POST['periodo']) && $_POST['periodo'] === 'anual') ? 'anual' : 'mensual';
+    $ref = textoPost('referencia', 80);
+    $nota = textoPost('nota', 200);
+    try {
+        if ($monto === null || $monto <= 0) {
+            throw new InvalidArgumentException('El monto no es válido (ejemplo: 99.90).');
+        }
+        if ($met === false || $ref === false || $nota === false) {
+            throw new InvalidArgumentException('Método, referencia o nota no válidos.');
+        }
+        $r = Cobros::registrarPago($e['id'], idPost('plan_id'), $periodoPago, $monto, $met, $ref, $nota, $operador['email']);
+        auditar($e['id'], 'pago_operador', Dinero::formato($monto) . ' ' . $periodoPago);
+        Sesion::flash('ok', $r['duplicado'] ? 'Ese pago (mismo método y referencia) ya estaba registrado: no se duplicó.' : 'Pago registrado. Plan ' . $r['plan'] . ' activo hasta el ' . date('d/m/Y', strtotime($r['vence'])) . '.');
+    } catch (InvalidArgumentException $x) {
+        Sesion::flash('error', $x->getMessage());
+    }
+    ir('/empresas/' . $e['id']);
+}
+if (preg_match('#^/empresas/(\d{1,9})/prueba$#', $ruta, $m) && $metodo === 'POST') {
+    $e = empresaPorId($m[1]);
+    if (!$e) {
+        terminar(404, 'No encontrada', 'No existe esa empresa.');
+    }
+    confirmarOVolver('/empresas/' . $e['id']);
+    $dias = enteroOpcional('dias', 1, 365);
+    try {
+        if ($dias === false) {
+            throw new InvalidArgumentException('Los días de prueba deben estar entre 1 y 365.');
+        }
+        $r = Cobros::iniciarPrueba($e['id'], idPost('plan_id'), $dias, true, $operador['email']);
+        auditar($e['id'], 'prueba_operador', $r['plan'] . ' ' . $r['dias'] . ' dias');
+        Sesion::flash('ok', 'Prueba gratis iniciada: plan ' . $r['plan'] . ' hasta el ' . date('d/m/Y', strtotime($r['vence'])) . '.');
+    } catch (InvalidArgumentException $x) {
+        Sesion::flash('error', $x->getMessage());
+    }
+    ir('/empresas/' . $e['id']);
+}
+if ($ruta === '/cobros' && $metodo === 'GET') {
+    Cobros::procesarVencimientos();
+    $estado = isset($_GET['estado']) && in_array($_GET['estado'], array('prueba', 'activa', 'gracia', 'vencida', 'porvencer'), true) ? $_GET['estado'] : '';
+    $sql = 'SELECT s.*, e.ruc, e.razon_social, e.activo AS empresa_activa, p.nombre AS plan FROM suscripciones s JOIN empresas e ON e.id = s.empresa_id LEFT JOIN planes p ON p.id = s.plan_id';
+    $par = array();
+    if ($estado === 'porvencer') {
+        $sql .= " WHERE s.estado = 'activa' AND s.vence <= ?";
+        $par[] = Cobros::sumarDias(Db::ahora(), Ajustes::dias('dias_aviso'));
+    } elseif ($estado !== '') {
+        $sql .= ' WHERE s.estado = ?';
+        $par[] = $estado;
+    }
+    $cuentas = array();
+    foreach (Db::consultar('SELECT estado, COUNT(*) AS n FROM suscripciones GROUP BY estado') as $c) {
+        $cuentas[$c['estado']] = (int) $c['n'];
+    }
+    pagina('cobros', array('titulo' => 'Cobros', 'seccion' => 'cobros', 'estado' => $estado, 'cuentas' => $cuentas,
+        'subs' => Db::consultar($sql . ' ORDER BY s.vence LIMIT 300', $par),
+        'porVencer' => (int) Db::uno("SELECT COUNT(*) AS n FROM suscripciones WHERE estado = 'activa' AND vence <= ?", array(Cobros::sumarDias(Db::ahora(), Ajustes::dias('dias_aviso'))))['n'],
+        'sinSuscripcion' => (int) Db::uno('SELECT COUNT(*) AS n FROM empresas e WHERE e.activo = 1 AND NOT EXISTS (SELECT 1 FROM suscripciones s WHERE s.empresa_id = e.id)')['n']));
+}
+if ($ruta === '/pagos' && $metodo === 'GET') {
+    $mes = date('Y-m');
+    $pagos = Db::consultar('SELECT g.*, e.ruc, e.razon_social, p.nombre AS plan FROM pagos g JOIN empresas e ON e.id = g.empresa_id LEFT JOIN planes p ON p.id = g.plan_id ORDER BY g.id DESC LIMIT 200');
+    $total = (int) Db::uno("SELECT COALESCE(SUM(monto), 0) AS n FROM pagos WHERE creado >= ?", array($mes . '-01 00:00:00'))['n'];
+    pagina('pagos', array('titulo' => 'Pagos', 'seccion' => 'cobros', 'pagos' => $pagos, 'totalMes' => $total, 'mes' => $mes));
+}
+if ($ruta === '/ajustes' && $metodo === 'GET') {
+    pagina('ajustes', array('titulo' => 'Ajustes', 'seccion' => 'ajustes', 'a' => Ajustes::todos(), 'planes' => Suscripciones::planesActivos()));
+}
+if ($ruta === '/ajustes/guardar' && $metodo === 'POST') {
+    $gracia = enteroOpcional('dias_gracia', 0, 60);
+    $aviso = enteroOpcional('dias_aviso', 1, 90);
+    $dest = isset($_POST['plan_vencido_id']) ? (string) $_POST['plan_vencido_id'] : '';
+    // texto de varias lineas: se permiten saltos de linea; se quitan los demas caracteres de control
+    $instr = isset($_POST['instrucciones_pago']) && is_string($_POST['instrucciones_pago']) ? trim(str_replace("\r\n", "\n", $_POST['instrucciones_pago'])) : '';
+    $instr = preg_replace('/[\x00-\x09\x0B-\x1F\x7F]/', '', $instr);
+    if (mb_strlen($instr, 'UTF-8') > 600) {
+        $instr = false;
+    }
+    $falla = null;
+    if ($gracia === false || $gracia === null) {
+        $falla = 'Los días de gracia deben ser un número entre 0 y 60.';
+    } elseif ($aviso === false || $aviso === null) {
+        $falla = 'Los días de aviso antes de vencer deben ser un número entre 1 y 90.';
+    } elseif ($dest !== '' && (!ctype_digit($dest) || !Db::uno('SELECT id FROM planes WHERE id = ? AND activo = 1', array((int) $dest)))) {
+        $falla = 'El plan de destino no existe o está inactivo.';
+    } elseif ($instr === false) {
+        $falla = 'Las instrucciones de pago son demasiado largas (máximo 600) o tienen caracteres no permitidos.';
+    }
+    if ($falla !== null) {
+        Sesion::flash('error', $falla);
+        ir('/ajustes');
+    }
+    Ajustes::set('dias_gracia', (string) $gracia);
+    Ajustes::set('dias_aviso', (string) $aviso);
+    Ajustes::set('plan_vencido_id', $dest);
+    Ajustes::set('instrucciones_pago', $instr);
+    Sesion::flash('ok', 'Ajustes guardados.');
+    ir('/ajustes');
+}
+
 // ---------------------------------------------------------------- planes
 if ($ruta === '/planes' && $metodo === 'GET') {
     $planes = Db::consultar('SELECT p.*, (SELECT COUNT(*) FROM empresas e WHERE e.plan_id = p.id) AS nempresas FROM planes p ORDER BY p.activo DESC, (p.cuota_mensual IS NULL), p.cuota_mensual, p.id');
@@ -408,9 +544,22 @@ if ($ruta === '/planes/guardar' && $metodo === 'POST') {
     $wh = enteroOpcional('max_webhooks', 1, 100);
     $auto = isset($_POST['autoservicio']) && $_POST['autoservicio'] === '1' ? 1 : 0;
     $activo = isset($_POST['activo']) && $_POST['activo'] === '1' ? 1 : 0;
+    $publico = isset($_POST['publico']) && $_POST['publico'] === '1' ? 1 : 0;
+    $incluyePdf = isset($_POST['incluye_pdf']) && $_POST['incluye_pdf'] === '1' ? 1 : 0;
+    $precio = textoPost('precio', 40);
+    $pm = isset($_POST['precio_mensual']) ? trim((string) $_POST['precio_mensual']) : '';
+    $precioMensual = $pm === '' ? null : Dinero::aCentimos($pm);
+    $descAnual = enteroOpcional('descuento_anual', 0, 90);
+    $diasPrueba = enteroOpcional('dias_prueba', 0, 365);
     $falla = null;
     if ($nombre === false || !preg_match('/^[\p{L}\p{N} ._\-]{1,60}$/u', (string) $nombre)) {
         $falla = 'El nombre debe tener de 1 a 60 caracteres (letras, números, espacios, punto, guion).';
+    } elseif ($precio === false) {
+        $falla = 'El precio es demasiado largo (maximo 40 caracteres) o tiene caracteres no permitidos.';
+    } elseif ($pm !== '' && $precioMensual === null) {
+        $falla = 'El precio mensual no es válido (ejemplo: 99.90; máximo S/ 999,999.99).';
+    } elseif ($descAnual === false || $diasPrueba === false) {
+        $falla = 'El descuento anual debe estar entre 0 y 90 %, y los días de prueba entre 0 y 365.';
     } elseif ($cuota === false || $sunat === false || $gral === false || $wh === false || $wh === null) {
         $falla = 'Los números deben ser enteros positivos (déjelos vacíos para "ilimitado"; webhooks: de 1 a 100).';
     } elseif (($dup = Db::uno('SELECT id FROM planes WHERE nombre = ?', array($nombre))) && (int) $dup['id'] !== $id) {
@@ -431,12 +580,12 @@ if ($ruta === '/planes/guardar' && $metodo === 'POST') {
         ir('/planes');
     }
     if ($actual) {
-        Db::ejecutar('UPDATE planes SET nombre = ?, cuota_mensual = ?, limite_sunat_min = ?, limite_general_min = ?, max_webhooks = ?, autoservicio = ?, activo = ? WHERE id = ?',
-            array($nombre, $cuota, $sunat, $gral, $wh, $auto, $activo, $id));
+        Db::ejecutar('UPDATE planes SET nombre = ?, cuota_mensual = ?, limite_sunat_min = ?, limite_general_min = ?, max_webhooks = ?, autoservicio = ?, activo = ?, precio = ?, publico = ?, precio_mensual = ?, descuento_anual = ?, dias_prueba = ?, incluye_pdf = ? WHERE id = ?',
+            array($nombre, $cuota, $sunat, $gral, $wh, $auto, $activo, $precio !== '' ? $precio : null, $publico, $precioMensual, (int) $descAnual, (int) $diasPrueba, $incluyePdf, $id));
         Sesion::flash('ok', 'Plan "' . $nombre . '" actualizado. Aplica de inmediato a sus empresas.');
     } else {
-        Db::ejecutar('INSERT INTO planes (nombre, cuota_mensual, limite_sunat_min, limite_general_min, max_webhooks, autoservicio, activo, creado) VALUES (?,?,?,?,?,?,1,?)',
-            array($nombre, $cuota, $sunat, $gral, $wh, $auto, Db::ahora()));
+        Db::ejecutar('INSERT INTO planes (nombre, cuota_mensual, limite_sunat_min, limite_general_min, max_webhooks, autoservicio, activo, precio, publico, precio_mensual, descuento_anual, dias_prueba, incluye_pdf, creado) VALUES (?,?,?,?,?,?,1,?,?,?,?,?,?,?)',
+            array($nombre, $cuota, $sunat, $gral, $wh, $auto, $precio !== '' ? $precio : null, $publico, $precioMensual, (int) $descAnual, (int) $diasPrueba, $incluyePdf, Db::ahora()));
         Sesion::flash('ok', 'Plan "' . $nombre . '" creado.');
     }
     ir('/planes');

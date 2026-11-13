@@ -50,7 +50,7 @@ class Suscripciones
      * Pedido de un cliente. Si el plan es de autoservicio se asigna al instante; si no, queda PENDIENTE para el operador.
      * Devuelve 'automatica' o 'pendiente'.
      */
-    public static function solicitar(array $empresa, array $usuario, $planId, $nota = '')
+    public static function solicitar(array $empresa, array $usuario, $planId, $nota = '', $periodo = null)
     {
         $p = Db::uno('SELECT * FROM planes WHERE id = ? AND activo = 1', array((int) $planId));
         if (!$p) {
@@ -60,6 +60,7 @@ class Suscripciones
             throw new InvalidArgumentException('Ya tiene ese plan.');
         }
         $nota = substr(trim((string) $nota), 0, 200);
+        $periodo = in_array($periodo, array('mensual', 'anual'), true) ? $periodo : null;
         Db::ejecutar("UPDATE solicitudes_plan SET estado = 'cancelada', resuelto = ?, resuelto_por = 'reemplazada por una solicitud nueva' WHERE empresa_id = ? AND estado = 'pendiente'", array(Db::ahora(), (int) $empresa['id']));
         if ((int) $p['autoservicio'] === 1) {
             self::asignar($empresa['id'], $p['id'], 'cliente ' . $usuario['email']);
@@ -67,8 +68,8 @@ class Suscripciones
                 array((int) $empresa['id'], (int) $usuario['id'], (int) $p['id'], 'automatica', $nota, Db::ahora(), Db::ahora(), 'automatico'));
             return 'automatica';
         }
-        Db::ejecutar('INSERT INTO solicitudes_plan (empresa_id, usuario_id, plan_id, estado, nota, creado) VALUES (?,?,?,?,?,?)',
-            array((int) $empresa['id'], (int) $usuario['id'], (int) $p['id'], 'pendiente', $nota, Db::ahora()));
+        Db::ejecutar('INSERT INTO solicitudes_plan (empresa_id, usuario_id, plan_id, estado, nota, periodo, creado) VALUES (?,?,?,?,?,?,?)',
+            array((int) $empresa['id'], (int) $usuario['id'], (int) $p['id'], 'pendiente', $nota, $periodo, Db::ahora()));
         Auditoria::registrar($empresa['id'], $usuario['id'], 'plan_solicitado', $p['nombre']);
         return 'pendiente';
     }

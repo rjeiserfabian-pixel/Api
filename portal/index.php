@@ -8,7 +8,7 @@ require_once $raiz . '/libraries/env.php';
 foreach (array('Respuesta', 'Db', 'Crypto', 'Auth', 'Certificados', 'Validador', 'Motor', 'Series', 'Planes', 'Documentos', 'Webhooks') as $c) {
     require_once $raiz . '/v1/src/' . $c . '.php';
 }
-foreach (array('Vista', 'Sesion', 'Usuarios', 'Suscripciones') as $c) {
+foreach (array('Vista', 'Sesion', 'Usuarios', 'Suscripciones', 'Cobros') as $c) {
     require_once __DIR__ . '/src/' . $c . '.php';
 }
 date_default_timezone_set('America/Lima');
@@ -176,7 +176,7 @@ function leerArchivo($campo, $maximo = 102400)
 // ---------------------------------------------------------------- paginas
 if ($ruta === '/entorno' && $metodo === 'POST') {
     $_SESSION['entorno'] = (isset($_POST['entorno']) && $_POST['entorno'] === 'live') ? 'live' : 'test';
-    $permitidas = array('/', '/documentos', '/llaves', '/webhooks', '/certificado', '/credenciales', '/plan', '/cuenta', '/actividad');
+    $permitidas = array('/', '/documentos', '/llaves', '/webhooks', '/certificado', '/credenciales', '/plan', '/pdf', '/cuenta', '/actividad');
     ir(in_array(isset($_POST['volver']) ? $_POST['volver'] : '', $permitidas, true) ? $_POST['volver'] : '/');
 }
 
@@ -190,7 +190,7 @@ if ($ruta === '/' && $metodo === 'GET') {
     foreach (Db::consultar('SELECT * FROM documentos WHERE empresa_id = ? AND entorno = ? ORDER BY id DESC LIMIT 8', array($empresaId, $entorno)) as $f) {
         $recientes[] = Documentos::formatear($f);
     }
-    pagina('dashboard', array('titulo' => 'Resumen', 'seccion' => 'resumen', 'uso' => Planes::uso($ctx), 'conteos' => $conteos, 'recientes' => $recientes,
+    pagina('dashboard', array('titulo' => 'Resumen', 'seccion' => 'resumen', 'uso' => Planes::uso($ctx), 'aviso' => Cobros::aviso($empresaId), 'conteos' => $conteos, 'recientes' => $recientes,
         'cert' => Certificados::estado($empresaId, $entorno),
         'nLlaves' => (int) Db::uno('SELECT COUNT(*) AS n FROM api_keys WHERE empresa_id = ? AND entorno = ? AND activo = 1', array($empresaId, $entorno))['n'],
         'nWebhooks' => (int) Db::uno('SELECT COUNT(*) AS n FROM webhooks WHERE empresa_id = ? AND entorno = ?', array($empresaId, $entorno))['n']));
@@ -242,7 +242,8 @@ if (preg_match('#^/documentos/(doc_[a-f0-9]{20})$#', $ruta, $m) && $metodo === '
     if (($d['entorno'] === 'produccion') !== ($entorno === 'live')) {
         terminar(404, 'No encontrado', 'Ese documento es de otro entorno. Cambie entre Pruebas y Producción (arriba a la derecha).');
     }
-    pagina('documento', array('titulo' => 'Documento', 'seccion' => 'documentos', 'd' => $d));
+    $qr = !empty($d['verificacion']) ? 'data:image/png;base64,' . base64_encode(Verificacion::qrPng($d['verificacion']['url'])) : null;
+    pagina('documento', array('titulo' => 'Documento', 'seccion' => 'documentos', 'd' => $d, 'qr' => $qr, 'verifPublica' => (int) $empresa['verificacion_publica'] === 1));
 }
 
 // ---- llaves API
@@ -436,15 +437,37 @@ if ($ruta === '/credenciales/guardar' && $metodo === 'POST') {
 // ---- plan (el cliente puede pedir un cambio; los planes de autoservicio se activan al instante, los demas los aprueba el operador)
 if ($ruta === '/plan' && $metodo === 'GET') {
     pagina('plan', array('titulo' => 'Mi plan', 'seccion' => 'plan', 'esAdmin' => $esAdmin, 'uso' => Planes::uso($ctx), 'planes' => Suscripciones::planesActivos(),
-        'pendiente' => Suscripciones::pendienteDe($empresaId), 'planActualId' => $empresa['plan_id'] === null ? 0 : (int) $empresa['plan_id']));
+        'pendiente' => Suscripciones::pendienteDe($empresaId), 'planActualId' => $empresa['plan_id'] === null ? 0 : (int) $empresa['plan_id'],
+        'sus' => Cobros::suscripcion($empresaId), 'aviso' => Cobros::aviso($empresaId), 'instrucciones' => (string) Ajustes::get('instrucciones_pago'),
+        'puedeProbar' => (function () use ($empresaId) {
+            $ids = array();
+            foreach (Suscripciones::planesActivos() as $pl) {
+                if (Cobros::puedeProbar($empresaId, $pl)) {
+                    $ids[(int) $pl['id']] = true;
+                }
+            }
+            return $ids;
+        })()));
 }
 if ($ruta === '/plan/solicitar' && $metodo === 'POST') {
     soloAdmin();
     confirmarOVolver('/plan');
     $planId = isset($_POST['plan_id']) && ctype_digit((string) $_POST['plan_id']) ? (int) $_POST['plan_id'] : 0;
     try {
-        $r = Suscripciones::solicitar($empresa, $usuario, $planId, isset($_POST['nota']) ? (string) $_POST['nota'] : '');
+        $r = Suscripciones::solicitar($empresa, $usuario, $planId, isset($_POST['nota']) ? (string) $_POST['nota'] : '', isset($_POST['periodo']) ? (string) $_POST['periodo'] : null);
         Sesion::flash('ok', $r === 'automatica' ? 'Listo: su plan ya cambió.' : 'Solicitud enviada. El administrador del servicio la revisará y la activará.');
+    } catch (InvalidArgumentException $x) {
+        Sesion::flash('error', $x->getMessage());
+    }
+    ir('/plan');
+}
+if ($ruta === '/plan/prueba' && $metodo === 'POST') {
+    soloAdmin();
+    confirmarOVolver('/plan');
+    $planId = isset($_POST['plan_id']) && ctype_digit((string) $_POST['plan_id']) ? (int) $_POST['plan_id'] : 0;
+    try {
+        $r = Cobros::iniciarPrueba($empresaId, $planId, null, false, 'cliente ' . $usuario['email']);
+        Sesion::flash('ok', 'Su prueba gratis del plan ' . $r['plan'] . ' comenzó: dura ' . $r['dias'] . ' días (hasta el ' . date('d/m/Y', strtotime($r['vence'])) . ').');
     } catch (InvalidArgumentException $x) {
         Sesion::flash('error', $x->getMessage());
     }
@@ -457,13 +480,111 @@ if ($ruta === '/plan/cancelar' && $metodo === 'POST') {
     ir('/plan');
 }
 
+// ---- comprobantes en PDF: personalizacion (logo, color, pie) y descarga
+/** Entrega un PDF generado por nosotros. La politica de seguridad estricta del portal impide que el visor de PDF del navegador cargue; se omite SOLO aqui. */
+function enviarPdf($contenido, $nombre)
+{
+    header_remove('Content-Security-Policy');
+    header('Content-Type: application/pdf');
+    header('Content-Disposition: inline; filename="' . preg_replace('/[^A-Za-z0-9._\-]/', '_', $nombre) . '"');
+    header('Cache-Control: private, no-store');
+    header('Content-Length: ' . strlen($contenido));
+    echo $contenido;
+    exit;
+}
+if (preg_match('#^/documentos/(doc_[a-f0-9]{20})/pdf$#', $ruta, $m) && $metodo === 'GET') {
+    try {
+        $f = Documentos::fila($ctx, $m[1]); // solo de SU empresa
+    } catch (ApiError $e) {
+        terminar(404, 'No encontrado', 'No existe ese documento.');
+    }
+    if (($f['entorno'] === 'live') !== ($entorno === 'live')) {
+        terminar(404, 'No encontrado', 'Ese documento es de otro entorno. Cambie entre Pruebas y Producción (arriba a la derecha).');
+    }
+    try {
+        $r = Documentos::pdf($ctx, $m[1], isset($_GET['formato']) && is_string($_GET['formato']) ? $_GET['formato'] : null);
+    } catch (ApiError $e) {
+        terminar($e->status === 403 ? 403 : 409, 'PDF no disponible', $e->getMessage());
+    }
+    enviarPdf($r['pdf'], $r['nombre']);
+}
+if ($ruta === '/pdf' && $metodo === 'GET') {
+    require_once $raiz . '/v1/src/PdfConfig.php';
+    pagina('pdf', array('titulo' => 'Comprobantes PDF', 'seccion' => 'pdf', 'esAdmin' => $esAdmin, 'cfg' => PdfConfig::de($empresaId), 'tieneLogo' => PdfConfig::rutaLogo($empresaId) !== null,
+        'planIncluye' => !empty(Planes::de($empresa)['incluye_pdf']), 'verifPublica' => (int) $empresa['verificacion_publica'] === 1));
+}
+if ($ruta === '/pdf/guardar' && $metodo === 'POST') {
+    soloAdmin();
+    require_once $raiz . '/v1/src/PdfConfig.php';
+    $v = PdfConfig::validar(array('color' => isset($_POST['color']) ? $_POST['color'] : '', 'formato' => isset($_POST['formato']) ? $_POST['formato'] : 'a4', 'pie' => isset($_POST['pie']) ? $_POST['pie'] : '',
+        'contacto' => isset($_POST['contacto']) ? $_POST['contacto'] : '', 'mostrar_verificacion' => isset($_POST['mostrar_verificacion']) ? $_POST['mostrar_verificacion'] : ''));
+    if ($v['error'] !== null) {
+        Sesion::flash('error', $v['error']);
+        ir('/pdf');
+    }
+    PdfConfig::guardar($empresaId, $v['datos']);
+    Auditoria::registrar($empresaId, $usuario['id'], 'pdf_configurado', 'formato ' . $v['datos']['formato'] . ', color ' . $v['datos']['color']);
+    Sesion::flash('ok', 'Cambios guardados. Todos sus PDF (también los anteriores) usan esta personalización.');
+    ir('/pdf');
+}
+if ($ruta === '/pdf/logo' && $metodo === 'POST') {
+    soloAdmin();
+    require_once $raiz . '/v1/src/PdfConfig.php';
+    try {
+        if (!isset($_FILES['logo']) || !is_array($_FILES['logo']) || $_FILES['logo']['error'] !== UPLOAD_ERR_OK || !is_uploaded_file($_FILES['logo']['tmp_name'])) {
+            throw new InvalidArgumentException('No se recibió el archivo. Elija una imagen PNG o JPG de hasta 1 MB.');
+        }
+        PdfConfig::guardarLogo($empresaId, $_FILES['logo']['tmp_name']);
+        Auditoria::registrar($empresaId, $usuario['id'], 'logo_actualizado', '');
+        Sesion::flash('ok', 'Logo guardado.');
+    } catch (InvalidArgumentException $x) {
+        Sesion::flash('error', $x->getMessage());
+    }
+    ir('/pdf');
+}
+if ($ruta === '/pdf/logo/quitar' && $metodo === 'POST') {
+    soloAdmin();
+    require_once $raiz . '/v1/src/PdfConfig.php';
+    PdfConfig::quitarLogo($empresaId);
+    Auditoria::registrar($empresaId, $usuario['id'], 'logo_quitado', '');
+    Sesion::flash('ok', 'Logo eliminado.');
+    ir('/pdf');
+}
+if ($ruta === '/pdf/logo.png' && $metodo === 'GET') { // el logo de SU empresa (para mostrarlo en la configuracion)
+    require_once $raiz . '/v1/src/PdfConfig.php';
+    $r = PdfConfig::rutaLogo($empresaId);
+    if (!$r) {
+        terminar(404, 'No encontrado', 'Su empresa no tiene logo.');
+    }
+    header('Content-Type: image/png');
+    header('Cache-Control: private, no-store');
+    readfile($r);
+    exit;
+}
+if ($ruta === '/pdf/ejemplo' && $metodo === 'GET') { // comprobante de EJEMPLO con su logo, color y pie
+    require_once $raiz . '/v1/src/Pdf.php';
+    $cfg = PdfConfig::de($empresaId);
+    $fmt = (isset($_GET['formato']) && $_GET['formato'] === 'ticket') ? 'ticket' : 'a4';
+    $urlV = $cfg['mostrar_verificacion'] && (int) $empresa['verificacion_publica'] === 1 ? Verificacion::url(Verificacion::slug($empresa['ruc'], '01', 'F001', 123, 'live')) : null;
+    enviarPdf(Pdf::dibujar(Pdf::ejemplo($empresa), $cfg, $fmt, $cfg['logo'] ? PdfConfig::rutaLogo($empresaId) : null, $urlV), 'ejemplo-' . $fmt . '.pdf');
+}
+
 // ---- actividad y cuenta
 if ($ruta === '/actividad' && $metodo === 'GET') {
     soloAdmin();
     pagina('actividad', array('titulo' => 'Actividad', 'seccion' => 'actividad', 'eventos' => Auditoria::recientes($empresaId)));
 }
 if ($ruta === '/cuenta' && $metodo === 'GET') {
-    pagina('cuenta', array('titulo' => 'Mi cuenta', 'seccion' => 'cuenta'));
+    pagina('cuenta', array('titulo' => 'Mi cuenta', 'seccion' => 'cuenta', 'esAdmin' => $esAdmin, 'verifPublica' => (int) $empresa['verificacion_publica'] === 1));
+}
+if ($ruta === '/cuenta/verificacion' && $metodo === 'POST') {
+    soloAdmin();
+    confirmarOVolver('/cuenta');
+    $activar = (isset($_POST['activa']) && $_POST['activa'] === '1') ? 1 : 0;
+    Db::ejecutar('UPDATE empresas SET verificacion_publica = ? WHERE id = ?', array($activar, $empresaId));
+    Auditoria::registrar($empresaId, $usuario['id'], $activar ? 'verificacion_activada' : 'verificacion_desactivada', '');
+    Sesion::flash('ok', $activar ? 'La verificación pública de sus documentos quedó ACTIVADA.' : 'La verificación pública quedó DESACTIVADA: los enlaces y códigos QR de sus documentos ya no mostrarán nada.');
+    ir('/cuenta');
 }
 if ($ruta === '/cuenta/clave' && $metodo === 'POST') {
     $nueva = isset($_POST['clave_nueva']) ? (string) $_POST['clave_nueva'] : '';

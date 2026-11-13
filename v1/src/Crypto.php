@@ -15,6 +15,12 @@ class Crypto
         return $raw;
     }
 
+    /** Firma HMAC-SHA256 con una clave derivada de APP_KEY (para tokens que no deben poder falsificarse). */
+    public static function firmar($texto)
+    {
+        return hash_hmac('sha256', $texto, hash('sha256', 'firma|' . self::llave(), true));
+    }
+
     public static function cifrar($texto)
     {
         if ($texto === null || $texto === '') {
